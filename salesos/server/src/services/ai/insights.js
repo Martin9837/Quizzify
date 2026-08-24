@@ -9,6 +9,14 @@ import { OPEN_STAGE_KEYS, STAGE_MAP } from '../../lib/constants.js';
  * page, and the AI assistant's tools -- one implementation, one set of rules.
  */
 
+/** Human-scaled age: 6h, 3d, 5w. "untouched for 3768h" tells nobody anything. */
+function ageLabel(hours) {
+  const value = Math.max(0, Math.round(Number(hours) || 0));
+  if (value < 48) return `${value}h`;
+  const days = Math.round(value / 24);
+  return days < 21 ? `${days}d` : `${Math.round(days / 7)}w`;
+}
+
 const ownerClause = (ownerIds, column = 'owner_id') => {
   if (!ownerIds || ownerIds === 'all') return { sql: '', params: [] };
   const list = Array.isArray(ownerIds) ? ownerIds : [ownerIds];
@@ -291,6 +299,7 @@ export function neverContacted({ organizationId, ownerIds = 'all', limit = 20 })
     score: row.score,
     ownerName: row.owner_name,
     ageHours: Math.round((Date.now() - new Date(row.created_at)) / 3600000),
+    ageLabel: ageLabel((Date.now() - new Date(row.created_at)) / 3600000),
   }));
 }
 
@@ -510,7 +519,7 @@ export function callListForToday({ organizationId, userId, limit = 12 }) {
       dealId: null,
       value: 0,
       stage: null,
-    }, lead.ageHours > 24 ? 45 : 30, `New lead untouched for ${lead.ageHours}h`);
+    }, lead.ageHours > 24 ? 45 : 30, `New lead untouched for ${ageLabel(lead.ageHours)}`);
   }
 
   for (const lead of needsFollowUp({ organizationId, ownerIds: [userId], days: 10, limit: 10 })) {

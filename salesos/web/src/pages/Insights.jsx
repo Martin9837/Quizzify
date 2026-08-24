@@ -207,7 +207,7 @@ export default function Insights() {
                       <span className="xs muted truncate">{lead.company} · {titleCase(lead.source || 'unknown source')}</span>
                     </div>
                     <div className="row-tight">
-                      <Badge tone={lead.ageHours > 48 ? 'danger' : 'outline'}>{lead.ageHours}h old</Badge>
+                      <Badge tone={lead.ageHours > 48 ? 'danger' : 'outline'}>{lead.ageLabel ?? `${lead.ageHours}h`} old</Badge>
                       <button type="button" className="btn sm ghost icon" aria-label="Call" onClick={() => window.salesos?.startCall({ leadId: lead.leadId })}>
                         <IconPhone size={13} />
                       </button>
