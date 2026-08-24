@@ -1,5 +1,12 @@
 # Quiz Web App
 
+> **Also in this repository: [`salesos/`](salesos/) — SalesOS**, an AI-powered sales
+> team CRM and calling application. Agents call from one screen and the transcript,
+> summary, objections, next steps and CRM updates are waiting when they hang up.
+> `cd salesos && npm install && npm run dev` — no API keys required.
+> See [`salesos/README.md`](salesos/README.md).
+
+
 ![GitHub](https://img.shields.io/github/license/alok-2002/Quizzify)
 ![GitHub stars](https://img.shields.io/github/stars/alok-2002/Quizzify)
 ![GitHub forks](https://img.shields.io/github/forks/alok-2002/Quizzify)

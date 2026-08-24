@@ -1,0 +1,182 @@
+/* ==========================================================================
+   Design tokens.
+   Light is the base; dark overrides only colour values so every component
+   inherits both themes without duplicated rules.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* Neutrals */
+  --bg: #f6f7f9;
+  --bg-raised: #ffffff;
+  --bg-sunken: #eef0f4;
+  --bg-hover: #f0f2f6;
+  --bg-active: #e6eaf2;
+  --surface-border: #e2e5ec;
+  --surface-border-strong: #cdd3de;
+
+  /* Text */
+  --text: #10131a;
+  --text-secondary: #4b5361;
+  --text-muted: #7a8290;
+  --text-inverse: #ffffff;
+
+  /* Brand + semantics */
+  --accent: #2f6df6;
+  --accent-hover: #1f57d6;
+  --accent-soft: #e8f0ff;
+  --accent-border: #b9d0ff;
+  --success: #128a5b;
+  --success-soft: #e2f5ec;
+  --warning: #a76a00;
+  --warning-soft: #fdf1dc;
+  --danger: #c3372b;
+  --danger-soft: #fdeceb;
+  --info: #0d7490;
+  --info-soft: #e0f4fa;
+  --purple: #6d45c9;
+  --purple-soft: #f0e9ff;
+
+  /* Temperature scale used across leads and deals */
+  --hot: #c3372b;
+  --hot-soft: #fdeceb;
+  --warm: #a76a00;
+  --warm-soft: #fdf1dc;
+  --cold: #4b6a8a;
+  --cold-soft: #e9eff5;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(16, 19, 26, 0.06), 0 1px 3px rgba(16, 19, 26, 0.04);
+  --shadow-md: 0 4px 12px rgba(16, 19, 26, 0.08), 0 1px 3px rgba(16, 19, 26, 0.04);
+  --shadow-lg: 0 16px 40px rgba(16, 19, 26, 0.16), 0 2px 8px rgba(16, 19, 26, 0.06);
+  --shadow-focus: 0 0 0 3px rgba(47, 109, 246, 0.28);
+
+  /* Geometry */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Type */
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 34px;
+
+  /* Layout */
+  --sidebar-width: 232px;
+  --sidebar-collapsed: 64px;
+  --topbar-height: 56px;
+  --dock-height: 76px;
+
+  --transition: 140ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0b0e15;
+  --bg-raised: #141924;
+  --bg-sunken: #0f131c;
+  --bg-hover: #1b2130;
+  --bg-active: #232b3c;
+  --surface-border: #232a38;
+  --surface-border-strong: #333c4e;
+
+  --text: #eef1f7;
+  --text-secondary: #a7b0c0;
+  --text-muted: #79839a;
+  --text-inverse: #0b0e15;
+
+  --accent: #5b8cff;
+  --accent-hover: #7ba3ff;
+  --accent-soft: #16233d;
+  --accent-border: #2b3f68;
+  --success: #3fca8f;
+  --success-soft: #10281f;
+  --warning: #e0a44b;
+  --warning-soft: #2a2113;
+  --danger: #f0776a;
+  --danger-soft: #2c1715;
+  --info: #4cc0dc;
+  --info-soft: #10262d;
+  --purple: #a78bfa;
+  --purple-soft: #201a35;
+
+  --hot: #f0776a;
+  --hot-soft: #2c1715;
+  --warm: #e0a44b;
+  --warm-soft: #2a2113;
+  --cold: #8fa8c4;
+  --cold-soft: #171e28;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.6);
+  --shadow-focus: 0 0 0 3px rgba(91, 140, 255, 0.35);
+}
+
+/* Respect the OS preference when the user has not chosen explicitly. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0b0e15;
+    --bg-raised: #141924;
+    --bg-sunken: #0f131c;
+    --bg-hover: #1b2130;
+    --bg-active: #232b3c;
+    --surface-border: #232a38;
+    --surface-border-strong: #333c4e;
+    --text: #eef1f7;
+    --text-secondary: #a7b0c0;
+    --text-muted: #79839a;
+    --text-inverse: #0b0e15;
+    --accent: #5b8cff;
+    --accent-hover: #7ba3ff;
+    --accent-soft: #16233d;
+    --accent-border: #2b3f68;
+    --success: #3fca8f;
+    --success-soft: #10281f;
+    --warning: #e0a44b;
+    --warning-soft: #2a2113;
+    --danger: #f0776a;
+    --danger-soft: #2c1715;
+    --info: #4cc0dc;
+    --info-soft: #10262d;
+    --purple: #a78bfa;
+    --purple-soft: #201a35;
+    --hot: #f0776a;
+    --hot-soft: #2c1715;
+    --warm: #e0a44b;
+    --warm-soft: #2a2113;
+    --cold: #8fa8c4;
+    --cold-soft: #171e28;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.6);
+    --shadow-focus: 0 0 0 3px rgba(91, 140, 255, 0.35);
+  }
+}
+
+/* Denser layout for users who ask for it in preferences. */
+:root[data-density='compact'] {
+  --text-base: 13px;
+  --space-4: 12px;
+  --space-5: 18px;
+}
