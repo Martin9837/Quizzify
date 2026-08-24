@@ -108,6 +108,34 @@ deletion. Only a super admin can change a retention window.
   the detail, so internals never leak to a caller.
 - Logs redact password, token, secret, key and credential fields.
 
+## Dependency posture
+
+The server runs on two production dependencies — `express` and `cors`. Everything else
+(database, auth, crypto, job queue, HTTP client for the model provider) is Node's own
+standard library. The browser bundle adds React and React Router. A small surface means
+fewer advisories to chase and no transitive supply chain to audit.
+
+`npm audit` on a clean install reports 4 vulnerable packages (1 high, 3 moderate). All
+of them sit in the frontend toolchain, and none is reachable in a production
+deployment:
+
+- **vite / esbuild** — the high is a `server.fs.deny` bypass on Windows alternate
+  paths; the others are dev-server path traversal in optimised-deps `.map` handling, a
+  Windows-only `launch-editor` NTLMv2 disclosure, and esbuild allowing any origin to
+  query a running dev server. Every one of these is a *development server* issue.
+  Production serves a prebuilt static `dist/` through Express and never starts Vite, so
+  the vulnerable code paths are not deployed.
+- **react-router** — an open redirect via backslashes in `<Link>` and `useNavigate`.
+  Every navigation target in this app is either a string literal or a rooted internal
+  path assembled server-side from a generated id (`routes/search.js:hrefFor`, and the
+  `link` column on notifications, which is always `/leads/${id}`-shaped). There is no
+  `?next=` or `returnTo` redirect parameter anywhere in the client, so no
+  caller-controlled string reaches the router.
+
+Both remediations are breaking majors (vite 8, react-router 7). They belong on a
+deliberate maintenance pass with the UI regression suite run afterwards, not applied
+blind through `npm audit fix --force`.
+
 ## What is deliberately not built
 
 Honest gaps, so nobody assumes otherwise:
