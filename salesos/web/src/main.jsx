@@ -4,7 +4,25 @@ import { BrowserRouter } from 'react-router-dom';
 import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
+import './styles/ios.css';
 import App from './App.jsx';
+
+/**
+ * Register the service worker so the app is installable and its shell survives a
+ * dropped connection. Production only: in development it would serve yesterday's
+ * bundle from cache and make every change look like it did not apply.
+ *
+ * A service worker needs a secure context, so this is a no-op over plain HTTP on
+ * a LAN address. The app still works and is still installable there; it just
+ * has no offline shell.
+ */
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((error) => {
+      console.warn('service worker registration failed', error);
+    });
+  });
+}
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>

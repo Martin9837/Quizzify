@@ -1,0 +1,37 @@
+{
+  "name": "SalesOS — AI Sales Operating System",
+  "short_name": "SalesOS",
+  "description": "Every conversation becomes structured CRM data. Calls, transcripts, AI analysis and pipeline in one place.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "categories": ["business", "productivity", "sales"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Who to call today",
+      "short_name": "Call list",
+      "url": "/calls",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Leads",
+      "url": "/leads",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Pipeline",
+      "url": "/pipeline",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

@@ -43,11 +43,45 @@ same interfaces a model uses, so the whole product is usable offline. Set
 `ANTHROPIC_API_KEY` to switch to model-backed analysis — nothing else changes.
 
 ```bash
-npm test          # 92 server tests
+npm test          # 96 server tests
 npm run build     # production build of the web client
 npm start         # single process serving the API and the built client
 npm run reset     # rebuild the demo dataset
 ```
+
+---
+
+## Install on a phone
+
+The client is a PWA, so it installs to a home screen as a standalone app — its
+own icon, no browser chrome, and a shell that still opens without a connection.
+There is no native iOS or Android build and no app store listing.
+
+**On iPhone (Safari):** open the app's URL → Share → **Add to Home Screen**. iOS
+only offers this from Safari; Chrome or Firefox on iOS will not show it.
+**On Android (Chrome):** the browser offers *Install app* directly.
+
+The phone has to be able to reach the server, which means one of:
+
+| Setup | What works |
+| --- | --- |
+| Same Wi-Fi, `http://<your-ip>:4000` | Installs and runs. No offline shell — a service worker needs a secure context, and plain HTTP on a LAN address is not one. |
+| Any HTTPS origin (tunnel, reverse proxy, hosted) | Everything, including the offline shell. |
+
+`npm run dev` already binds to all interfaces, so `http://<your-machine-ip>:5173`
+works from a phone on the same network without extra flags.
+
+### What the service worker does and does not cache
+
+It caches the app shell and the content-hashed build assets, and nothing else.
+Requests to `/api` and `/health` always go to the network and are never written to
+a cache, because they carry bearer tokens and mutable CRM data — a stale lead
+record presented as current is worse than an honest network error. So offline you
+get the app and a clear failure on data, not a confident wrong answer.
+
+Asset names are read out of the served `index.html` at install time rather than
+baked into `sw.js`, so a deploy needs no regeneration step: the worker caches
+whatever the current build actually references.
 
 ---
 
@@ -101,8 +135,9 @@ salesos/
 │   ├── src/services/  the domain: ai, telephony, email, storage, queue,
 │   │                  search, automation, notifications, audit, crm
 │   ├── src/routes/    thin HTTP layer over the services
-│   └── test/          92 tests over the real app and a real database
-└── web/               React + Vite SPA
+│   └── test/          96 tests over the real app and a real database
+└── web/               React + Vite SPA (installable as a PWA)
+    ├── public/        manifest, service worker, home-screen icons
     ├── src/components design system, charts, call dock, assistant, palette
     ├── src/lib/       API client, auth, realtime (SSE), hooks, formatting
     └── src/pages/     one file per screen

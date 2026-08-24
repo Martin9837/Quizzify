@@ -74,6 +74,14 @@ export function createApp() {
   // Serve the built SPA when it exists, so a single process can host both.
   const webDist = path.resolve(__dirname, '../../web/dist');
   if (fs.existsSync(webDist)) {
+    // The service worker decides when every other asset is refreshed, so it must
+    // not itself be served from a stale cache -- otherwise a deploy can take an
+    // hour to reach an installed client. Revalidate it on every request.
+    app.get('/sw.js', (req, res) => {
+      res.set('Cache-Control', 'no-cache');
+      res.type('application/javascript');
+      res.sendFile(path.join(webDist, 'sw.js'));
+    });
     app.use(express.static(webDist, { maxAge: '1h', index: false }));
     app.get(/^\/(?!api|health).*/, (req, res, next) => {
       res.sendFile(path.join(webDist, 'index.html'), (error) => (error ? next(error) : undefined));

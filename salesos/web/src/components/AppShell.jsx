@@ -165,9 +165,28 @@ export default function AppShell() {
 
   // Apply the theme to the document root; 'system' removes the attribute so the
   // prefers-color-scheme media query takes over.
+  //
+  // The second half keeps the iOS status bar in step. When installed to a home
+  // screen, iOS tints the bar from theme-color; the two media-scoped tags in
+  // index.html handle 'system', but an explicit choice has to win over the OS
+  // setting. The first matching tag wins, so the override is prepended, and its
+  // colour is read back off the applied palette rather than restated here.
   useEffect(() => {
     if (theme === 'system') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', theme);
+
+    const existing = document.getElementById('theme-color-override');
+    if (theme === 'system') {
+      existing?.remove();
+      return;
+    }
+    const tag = existing ?? document.createElement('meta');
+    if (!existing) {
+      tag.id = 'theme-color-override';
+      tag.setAttribute('name', 'theme-color');
+      document.head.prepend(tag);
+    }
+    tag.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());
   }, [theme]);
 
   useEffect(() => {
@@ -312,7 +331,7 @@ export default function AppShell() {
           >
             <IconSearch />
             <span className="truncate">Search or ask anything</span>
-            <span className="right row-tight"><kbd>⌘</kbd><kbd>K</kbd></span>
+            <span className="right row-tight kbd-hint"><kbd>⌘</kbd><kbd>K</kbd></span>
           </button>
 
           <div className="right row-tight">
