@@ -14,6 +14,21 @@ import { stats as queueStats } from './services/queue/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Origins the installed mobile app loads its own bundle from. Capacitor serves
+ * the web assets from these fixed schemes, so a native client's requests always
+ * arrive cross-origin no matter which server it is pointed at.
+ *
+ * Allowing them is not a weakening of the boundary: every endpoint here is
+ * authenticated by a bearer token, and a native app is not bound by CORS in the
+ * first place -- it can issue plain HTTP requests outside the web view. Refusing
+ * them would only break the legitimate app while stopping nobody.
+ */
+const NATIVE_APP_ORIGINS = new Set([
+  'capacitor://localhost',
+  'ionic://localhost',
+]);
+
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
@@ -37,7 +52,8 @@ export function createApp() {
       || origin === selfOrigin
       || config.webOrigins.includes('*')
       || config.webOrigins.includes(origin)
-      || origin === config.publicUrl;
+      || origin === config.publicUrl
+      || NATIVE_APP_ORIGINS.has(origin);
     if (origin && !allowed) {
       logger.debug('cors origin rejected', { origin, requestId: req.id });
     }

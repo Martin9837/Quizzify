@@ -1,0 +1,12 @@
+{
+  "appId": "com.salesos.app",
+  "appName": "SalesOS",
+  "webDir": "web/dist",
+  "ios": {
+    "contentInset": "never",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "server": {
+    "iosScheme": "capacitor"
+  }
+}

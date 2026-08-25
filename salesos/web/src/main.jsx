@@ -5,6 +5,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
 import './styles/ios.css';
+import { isNativeShell } from './lib/server.js';
 import App from './App.jsx';
 
 /**
@@ -16,7 +17,10 @@ import App from './App.jsx';
  * a LAN address. The app still works and is still installable there; it just
  * has no offline shell.
  */
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+// Skipped in the native shell: the assets are already on the device inside the
+// app bundle, so there is nothing for a worker to cache, and the capacitor://
+// scheme is not one it can claim anyway.
+if (import.meta.env.PROD && !isNativeShell() && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((error) => {
       console.warn('service worker registration failed', error);

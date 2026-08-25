@@ -3,8 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "description": "SalesOS - AI Sales Operating System: CRM + calling + conversation intelligence",
-  "workspaces": ["server", "web"],
-  "engines": { "node": ">=22.5.0" },
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "postinstall": "echo 'SalesOS deps installed. Run: npm run dev'",
     "dev": "node scripts/dev.js",
@@ -14,6 +19,15 @@
     "start": "npm run start --workspace server",
     "seed": "npm run seed --workspace server",
     "reset": "npm run reset --workspace server",
-    "test": "npm run test --workspace server"
+    "test": "npm run test --workspace server",
+    "ios:sync": "npm run build && npx cap sync ios",
+    "ios:open": "npx cap open ios"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0"
   }
 }

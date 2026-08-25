@@ -51,11 +51,28 @@ npm run reset     # rebuild the demo dataset
 
 ---
 
-## Install on a phone
+## On a phone
 
-The client is a PWA, so it installs to a home screen as a standalone app — its
-own icon, no browser chrome, and a shell that still opens without a connection.
-There is no native iOS or Android build and no app store listing.
+Two ways, depending on whether you want an app store artefact.
+
+**The iPhone app.** `salesos/ios` is a real Xcode project — a native shell hosting
+the web client, signable and submittable to the App Store. Building it needs macOS
+with Xcode.
+
+```bash
+npm run ios:sync    # build the web client into the iOS project
+npm run ios:open    # open it in Xcode, then Run
+```
+
+On first launch it asks for your server's address once and remembers it. See
+[`docs/IOS.md`](docs/IOS.md) for signing, networking (App Transport Security and
+CORS), and an honest list of what is not native yet — calling still goes through
+the telephony provider rather than the iPhone dialer, and there are no push
+notifications.
+
+**Or install the web client to the home screen.** It is a PWA, so it installs as a
+standalone app with its own icon, no browser chrome, and a shell that still opens
+without a connection — no Mac and no Xcode required.
 
 **On iPhone (Safari):** open the app's URL → Share → **Add to Home Screen**. iOS
 only offers this from Safari; Chrome or Firefox on iOS will not show it.
@@ -136,6 +153,7 @@ salesos/
 │   │                  search, automation, notifications, audit, crm
 │   ├── src/routes/    thin HTTP layer over the services
 │   └── test/          96 tests over the real app and a real database
+├── ios/               native iOS app (Capacitor shell, opens in Xcode)
 └── web/               React + Vite SPA (installable as a PWA)
     ├── public/        manifest, service worker, home-screen icons
     ├── src/components design system, charts, call dock, assistant, palette
@@ -165,6 +183,7 @@ Design decisions worth knowing:
   actor type (`user` / `ai` / `system` / `automation`), and the evidence.
 
 Deeper detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ·
+The iPhone app: [`docs/IOS.md`](docs/IOS.md) ·
 API reference: [`docs/API.md`](docs/API.md) ·
 Security and compliance posture: [`docs/SECURITY.md`](docs/SECURITY.md)
 

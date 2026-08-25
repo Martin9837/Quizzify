@@ -1,10 +1,13 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { useState } from 'react';
 import { AuthProvider, useAuth } from './lib/auth.jsx';
+import { needsServerConfig } from './lib/server.js';
 import { RealtimeProvider } from './lib/realtime.jsx';
 import { ToastProvider, Spinner } from './components/UI.jsx';
 import AppShell from './components/AppShell.jsx';
 
 import Login from './pages/Login.jsx';
+import ServerSetup from './pages/ServerSetup.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Leads from './pages/Leads.jsx';
 import LeadDetail from './pages/LeadDetail.jsx';
@@ -55,6 +58,18 @@ function Protected({ children, permission }) {
 }
 
 export default function App() {
+  // The installed app has to know which server it talks to before any provider
+  // can usefully mount -- AuthProvider's first act is a call to that server. In
+  // a browser needsServerConfig() is always false and this collapses away.
+  const [unconfigured, setUnconfigured] = useState(needsServerConfig);
+  if (unconfigured) {
+    return (
+      <ToastProvider>
+        <ServerSetup onConnected={() => setUnconfigured(false)} />
+      </ToastProvider>
+    );
+  }
+
   return (
     <ToastProvider>
       <AuthProvider>

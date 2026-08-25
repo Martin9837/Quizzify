@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getAccessToken } from './api.js';
+import { getServerOrigin } from './server.js';
 import { useAuth } from './auth.jsx';
 
 /**
@@ -48,7 +49,7 @@ export function RealtimeProvider({ children }) {
       if (cancelled) return;
       const token = getAccessToken();
       if (!token) return;
-      const source = new EventSource(`/api/v1/events?access_token=${encodeURIComponent(token)}`);
+      const source = new EventSource(`${getServerOrigin()}/api/v1/events?access_token=${encodeURIComponent(token)}`);
       sourceRef.current = source;
 
       source.onopen = () => {

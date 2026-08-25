@@ -6,6 +6,8 @@
  * shared between concurrent requests so a burst of 401s produces one refresh.
  */
 
+import { getServerOrigin } from './server.js';
+
 const BASE = '/api/v1';
 const ACCESS_KEY = 'salesos.access';
 const REFRESH_KEY = 'salesos.refresh';
@@ -72,7 +74,7 @@ export class ApiError extends Error {
 async function refreshSession() {
   if (!refreshToken) return false;
   if (!refreshInFlight) {
-    refreshInFlight = fetch(`${BASE}/auth/refresh`, {
+    refreshInFlight = fetch(`${getServerOrigin()}${BASE}/auth/refresh`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
@@ -92,7 +94,10 @@ async function refreshSession() {
 }
 
 async function request(method, path, { body, query, signal, raw = false, retry = true } = {}) {
-  const url = new URL(`${BASE}${path}`, window.location.origin);
+  // getServerOrigin() is '' in a browser, so this stays a relative URL resolved
+  // against the page. In the native shell it is absolute, and the second
+  // argument is then ignored -- the app bundle's own origin serves no API.
+  const url = new URL(`${getServerOrigin()}${BASE}${path}`, window.location.origin);
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
