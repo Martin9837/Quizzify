@@ -23,6 +23,17 @@ import { money, number, percent, titleCase, dateTime, relative, date } from '../
  * than hiding it in documentation.
  */
 
+/**
+ * The panel opens for manager and up, because the user directory is a manager
+ * tool. Four of these sections are not: their data is admin-only and answers 403
+ * to a manager. Each one carries the permission its own screen needs to load, so
+ * a manager is shown the sections that work instead of a full navigation where a
+ * third of the tabs open onto an error. Same reasoning as the route guard in
+ * App.jsx -- refuse cleanly rather than render and then fail every call.
+ *
+ * Sections with no permission listed read from endpoints that are open to anyone
+ * who can reach this panel.
+ */
 const SECTIONS = [
   { to: 'users', label: 'Users', icon: <IconUsers size={14} /> },
   { to: 'teams', label: 'Teams', icon: <IconTarget size={14} /> },
@@ -31,11 +42,11 @@ const SECTIONS = [
   { to: 'ai', label: 'AI settings', icon: <IconRobot size={14} /> },
   { to: 'calls', label: 'Calls and recording', icon: <IconShield size={14} /> },
   { to: 'integrations', label: 'Integrations', icon: <IconLink size={14} /> },
-  { to: 'api', label: 'API and webhooks', icon: <IconKey size={14} /> },
+  { to: 'api', label: 'API and webhooks', icon: <IconKey size={14} />, permission: 'apikey:write' },
   { to: 'security', label: 'Security and retention', icon: <IconShield size={14} /> },
-  { to: 'audit', label: 'Audit log', icon: <IconFile size={14} /> },
-  { to: 'system', label: 'System', icon: <IconSettings size={14} /> },
-  { to: 'billing', label: 'Billing', icon: <IconDownload size={14} /> },
+  { to: 'audit', label: 'Audit log', icon: <IconFile size={14} />, permission: 'audit:read' },
+  { to: 'system', label: 'System', icon: <IconSettings size={14} />, permission: 'audit:read' },
+  { to: 'billing', label: 'Billing', icon: <IconDownload size={14} />, permission: 'billing:read' },
 ];
 
 /* ---------------------------------------------------------------- users --- */
@@ -1431,7 +1442,7 @@ function Billing() {
 /* ---------------------------------------------------------------- shell --- */
 export default function Admin() {
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
 
   return (
     <>
@@ -1441,7 +1452,7 @@ export default function Admin() {
       />
 
       <div className="row wrap gap-2" style={{ overflowX: 'auto' }}>
-        {SECTIONS.map((section) => (
+        {SECTIONS.filter((section) => !section.permission || can(section.permission)).map((section) => (
           <NavLink
             key={section.to}
             to={section.to}

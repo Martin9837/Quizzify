@@ -93,3 +93,41 @@ describe('AI suggestion scoping', () => {
     assert.equal(attempt.status, 403);
   });
 });
+
+describe('the admin panel across roles', () => {
+  // The panel is reachable from manager up, because the user directory is a
+  // manager tool, but several of its screens read admin-only data. These assert
+  // the split the navigation is filtered on: if a permission here is relaxed or
+  // tightened, the tab list in web/src/pages/Admin.jsx has to move with it.
+  const MANAGER_READABLE = ['users', 'teams', 'custom-fields', 'assignment-rules', 'settings', 'integrations', 'webhooks'];
+  const ADMIN_ONLY = ['api-keys', 'audit', 'system', 'billing'];
+
+  it('lets a manager load every section the panel offers them', async () => {
+    const { api } = await login(ACCOUNTS.manager);
+    for (const endpoint of MANAGER_READABLE) {
+      const { status } = await api.get(`/admin/${endpoint}`);
+      assert.equal(status, 200, `a manager should be able to read /admin/${endpoint}`);
+    }
+  });
+
+  it('refuses a manager the admin-only sections', async () => {
+    const { api } = await login(ACCOUNTS.manager);
+    for (const endpoint of ADMIN_ONLY) {
+      const { status } = await api.get(`/admin/${endpoint}`);
+      assert.equal(status, 403, `/admin/${endpoint} should be admin-only`);
+    }
+  });
+
+  it('gives an admin every section', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    for (const endpoint of [...MANAGER_READABLE, ...ADMIN_ONLY]) {
+      const { status } = await api.get(`/admin/${endpoint}`);
+      assert.equal(status, 200, `an admin should be able to read /admin/${endpoint}`);
+    }
+  });
+
+  it('keeps an agent out of the panel entirely', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    assert.equal((await api.get('/admin/users')).status, 403);
+  });
+});

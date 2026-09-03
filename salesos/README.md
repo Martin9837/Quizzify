@@ -43,7 +43,7 @@ same interfaces a model uses, so the whole product is usable offline. Set
 `ANTHROPIC_API_KEY` to switch to model-backed analysis — nothing else changes.
 
 ```bash
-npm test          # 103 server tests
+npm test          # 107 server tests
 npm run build     # production build of the web client
 npm start         # single process serving the API and the built client
 npm run reset     # rebuild the demo dataset
@@ -151,7 +151,7 @@ salesos/
 │   ├── src/services/  the domain: ai, telephony, email, storage, queue,
 │   │                  search, automation, notifications, audit, crm
 │   ├── src/routes/    thin HTTP layer over the services
-│   └── test/          103 tests over the real app and a real database
+│   └── test/          107 tests over the real app and a real database
 ├── ios/               native iOS app (Capacitor shell, opens in Xcode)
 └── web/               React + Vite SPA (installable as a PWA)
     ├── public/        manifest, service worker, home-screen icons
