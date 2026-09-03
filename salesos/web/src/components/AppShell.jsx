@@ -4,11 +4,12 @@ import { useAuth } from '../lib/auth.jsx';
 import { useRealtime, useRealtimeEvent } from '../lib/realtime.jsx';
 import { useApi, useKeyboardShortcut, useLocalState, useIsMobile } from '../lib/hooks.js';
 import api from '../lib/api.js';
-import { Avatar, Badge, Drawer, useToast } from './UI.jsx';
+import { Avatar, Badge, Checkbox, Drawer, Modal, useToast } from './UI.jsx';
 import CommandPalette from './CommandPalette.jsx';
 import AIAssistant from './AIAssistant.jsx';
 import CallDock from './CallDock.jsx';
 import { relative, titleCase } from '../lib/format.js';
+import { isNativeShell } from '../lib/server.js';
 import {
   IconDashboard, IconUsers, IconPhone, IconSparkles, IconPipeline, IconTask,
   IconCalendar, IconChart, IconSettings, IconBell, IconSearch, IconMoon, IconSun,
@@ -162,6 +163,10 @@ export default function AppShell() {
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantQuestion, setAssistantQuestion] = useState(null);
   const [activeCall, setActiveCall] = useState(null);
+  // Which way this install places calls: through the telephony provider, or on
+  // the handset. Only ever asked in the native app; null means not yet chosen.
+  const [callMethod, setCallMethod] = useLocalState('salesos.callMethod', null);
+  const [pendingCall, setPendingCall] = useState(null);
 
   // Apply the theme to the document root; 'system' removes the attribute so the
   // prefers-color-scheme media query takes over.
@@ -223,16 +228,38 @@ export default function AppShell() {
       : 'Call analysis ready');
   });
 
-  const startCall = useCallback(async ({ leadId, toNumber, dealId }) => {
+  const placeCall = useCallback(async ({ leadId, toNumber, dealId, viaDevice = false }) => {
     try {
-      const result = await api.post('/calls', { leadId, toNumber, dealId });
+      const result = await api.post('/calls', { leadId, toNumber, dealId, viaDevice });
       setActiveCall({ call: result.call, context: result.context, lead: result.lead, consent: result.consent });
+      // A device call is only placed once the handset takes the number. The CRM
+      // record already exists, so the dock is live and the agent can take notes
+      // and log the outcome when they come back to the app.
+      if (result.dialNumber) window.location.href = `tel:${result.dialNumber}`;
       return result;
     } catch (error) {
       toast.error(error);
       return null;
     }
   }, [toast]);
+
+  const startCall = useCallback((request) => {
+    // A browser has only one way to place a call, so there is nothing to ask.
+    if (!isNativeShell()) return placeCall(request);
+    if (callMethod) return placeCall({ ...request, viaDevice: callMethod === 'device' });
+    // First call from the installed app. The choice costs the agent the recording
+    // and everything downstream of it, so it is put to them once, explicitly,
+    // rather than decided quietly on their behalf.
+    return new Promise((resolve) => setPendingCall({ request, resolve }));
+  }, [callMethod, placeCall]);
+
+  const resolvePendingCall = useCallback(async (method, remember) => {
+    const pending = pendingCall;
+    setPendingCall(null);
+    if (!pending) return;
+    if (remember) setCallMethod(method);
+    pending.resolve(await placeCall({ ...pending.request, viaDevice: method === 'device' }));
+  }, [pendingCall, placeCall, setCallMethod]);
 
   // Exposed so any page can dial without prop-drilling through the router.
   useEffect(() => {
@@ -281,6 +308,23 @@ export default function AppShell() {
         </nav>
 
         <div className="sidebar-footer col-tight">
+          {/* Only in the installed app, and only once a choice has been made:
+              somewhere to change it, so the decision in the first-call prompt is
+              not permanent. */}
+          {isNativeShell() && callMethod && (
+            <button
+              type="button"
+              className="btn ghost sm nav-label"
+              style={{ justifyContent: 'flex-start' }}
+              onClick={() => setCallMethod(callMethod === 'device' ? 'provider' : 'device')}
+              title="Switch how calls are placed"
+            >
+              <IconPhone />
+              <span className="xs truncate">
+                {callMethod === 'device' ? 'Calling from iPhone' : 'Calling with SalesOS'}
+              </span>
+            </button>
+          )}
           <div className="row-tight">
             <Avatar name={user?.name} color={user?.avatarColor} />
             <div className="grow col-tight nav-label" style={{ gap: 0, minWidth: 0 }}>
@@ -366,6 +410,13 @@ export default function AppShell() {
         initialQuestion={assistantQuestion}
       />
 
+      <CallMethodModal
+        open={Boolean(pendingCall)}
+        name={pendingCall?.request?.leadName}
+        onChoose={resolvePendingCall}
+        onCancel={() => { pendingCall?.resolve(null); setPendingCall(null); }}
+      />
+
       {activeCall && (
         <CallDock
           call={activeCall.call}
@@ -389,5 +440,52 @@ export default function AppShell() {
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * Asked once, on the first call placed from the installed app.
+ *
+ * The two options are not interchangeable, and the difference is the whole
+ * product: a provider call is recorded, transcribed and analysed, and the CRM
+ * updates come out of it automatically. A handset call is a normal phone call
+ * that gets logged. Presenting that plainly is better than defaulting quietly
+ * and leaving someone to wonder why their transcripts stopped appearing.
+ */
+function CallMethodModal({ open, name, onChoose, onCancel }) {
+  const [remember, setRemember] = useState(true);
+  return (
+    <Modal
+      open={open}
+      onClose={onCancel}
+      title={name ? `How should we call ${name}?` : 'How should we place this call?'}
+    >
+      <div className="col">
+        <button type="button" className="demo-account" onClick={() => onChoose('provider', remember)}>
+          <span className="col-tight" style={{ gap: 2 }}>
+            <span className="small strong">Call with SalesOS</span>
+            <span className="xs muted">
+              Recorded and transcribed. The summary, objections and CRM updates are
+              waiting when you hang up.
+            </span>
+          </span>
+          <IconChevronRight />
+        </button>
+
+        <button type="button" className="demo-account" onClick={() => onChoose('device', remember)}>
+          <span className="col-tight" style={{ gap: 2 }}>
+            <span className="small strong">Call from this iPhone</span>
+            <span className="xs muted">
+              Uses your phone line and your minutes. Logged to the CRM, but not
+              recorded — so no transcript and no AI analysis.
+            </span>
+          </span>
+          <IconChevronRight />
+        </button>
+
+        <Checkbox checked={remember} onChange={setRemember} label="Remember my choice" />
+        <span className="xs muted">You can switch this any time from the sidebar.</span>
+      </div>
+    </Modal>
   );
 }

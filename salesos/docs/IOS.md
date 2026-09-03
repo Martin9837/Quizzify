@@ -75,11 +75,10 @@ Store distribution, and the on-device storage of the session.
 
 **Not** native, and worth knowing before you promise it to anyone:
 
-- **Calling.** Click-to-call goes through the configured telephony provider, the
-  same as in the browser. It does not hand off to the iPhone's own dialer, and the
-  app does not register with CallKit, so an in-progress SalesOS call does not
-  appear as a system call. Wiring `tel:` links or CallKit is the most obvious next
-  step for a sales app that lives on a phone.
+- **CallKit.** Calls can now be placed on the handset (see below), but the app
+  does not register with CallKit, so a SalesOS provider call does not appear as a
+  system call, and a handset call is a normal carrier call the app has handed off
+  to rather than one it controls.
 - **Push notifications.** The app uses the same SSE stream as the browser, which
   only delivers while the app is open. Real push needs APNs and a Capacitor push
   plugin.
@@ -89,6 +88,43 @@ Store distribution, and the on-device storage of the session.
   than an honest error.
 - **Background execution.** Nothing runs while the app is backgrounded.
 
+
+## Placing calls on the handset
+
+A phone in a salesperson's hand should be able to make a phone call, so the app
+can place a call either way, and the first call from a new install asks which:
+
+- **Call with SalesOS** — through the configured telephony provider, exactly as in
+  the browser. Recorded, transcribed, analysed; the CRM suggestions are waiting
+  when the call ends. This is the product.
+- **Call from this iPhone** — the app hands the number to the system dialer and the
+  conversation runs over the carrier.
+
+The choice is put to the agent rather than defaulted quietly because the second
+option costs the entire AI pipeline. iOS gives an app no access to carrier call
+audio, so a handset call has no recording, and therefore no transcript, no
+analysis and no extracted CRM updates. The existing machinery reports that
+honestly rather than failing: the call ends with `skipReason: 'not_recorded'` and
+no transcription job is queued.
+
+Everything else about a handset call is a normal SalesOS call. It is created
+through the same `POST /calls`, so it associates to the lead and deal, respects
+the do-not-call list, resolves the consent policy, writes the activity log and
+marks the lead contacted — which is the point. A call made this way still lands in
+the CRM.
+
+One consequence worth understanding: on a handset call the carrier reports nothing
+back, so the server never learns whether the callee picked up. The agent is the
+only witness, and `endCall` takes them at their word — a reported outcome of
+`connected` sets the answered time, and talk time becomes the whole handoff
+window, which is the closest available approximation. Provider calls are
+unaffected; there the provider observed the call and a claimed outcome does not
+override it. Without this, every real conversation an agent had from their own
+phone would have been filed as a no-answer.
+
+The mode is remembered per install, and the sidebar shows which one is active and
+switches it.
+
 ## Verification, honestly
 
 The native path was tested by serving the built bundle from a different origin
@@ -97,6 +133,17 @@ cross-origin situation the shell creates: first launch asks for a server, a bad
 address is reported rather than saved, a good one is remembered, sign-in and the
 dashboard work cross-origin, every API call targets the server rather than the
 bundle, and a relaunch goes straight in.
+
+Handset calling is covered on both sides. The server tests assert that a device
+call still associates to the lead, is never recorded whatever the caller asks for,
+still refuses a do-not-call contact, still marks the lead contacted, returns an
+E.164 number for the dialer, and files a reported conversation as connected rather
+than as a no-answer. The browser tests assert that the choice is put to the agent
+once, that nothing is dialled before they choose, that the choice is remembered,
+and that the sidebar switches it.
+
+The one part that cannot be checked here is the `tel:` handoff itself, which needs
+a real handset.
 
 What has **not** been verified is the app running on real iOS. That needs macOS
 and a device, so the Xcode build, code signing, ATS behaviour on a physical

@@ -43,7 +43,7 @@ same interfaces a model uses, so the whole product is usable offline. Set
 `ANTHROPIC_API_KEY` to switch to model-backed analysis — nothing else changes.
 
 ```bash
-npm test          # 96 server tests
+npm test          # 103 server tests
 npm run build     # production build of the web client
 npm start         # single process serving the API and the built client
 npm run reset     # rebuild the demo dataset
@@ -66,9 +66,8 @@ npm run ios:open    # open it in Xcode, then Run
 
 On first launch it asks for your server's address once and remembers it. See
 [`docs/IOS.md`](docs/IOS.md) for signing, networking (App Transport Security and
-CORS), and an honest list of what is not native yet — calling still goes through
-the telephony provider rather than the iPhone dialer, and there are no push
-notifications.
+CORS), how calls can be placed either through the telephony provider or on the
+handset, and an honest list of what is not native yet.
 
 **Or install the web client to the home screen.** It is a PWA, so it installs as a
 standalone app with its own icon, no browser chrome, and a shell that still opens
@@ -152,7 +151,7 @@ salesos/
 │   ├── src/services/  the domain: ai, telephony, email, storage, queue,
 │   │                  search, automation, notifications, audit, crm
 │   ├── src/routes/    thin HTTP layer over the services
-│   └── test/          96 tests over the real app and a real database
+│   └── test/          103 tests over the real app and a real database
 ├── ios/               native iOS app (Capacitor shell, opens in Xcode)
 └── web/               React + Vite SPA (installable as a PWA)
     ├── public/        manifest, service worker, home-screen icons

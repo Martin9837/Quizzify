@@ -101,6 +101,10 @@ router.post('/', requirePermission('call:place'), asyncHandler(async (req, res) 
     dealId: { type: 'string', maxLength: 40 },
     toNumber: { type: 'string', maxLength: 40 },
     recordingRequested: { type: 'boolean', default: true },
+    // Place the call on the agent's own handset instead of through the telephony
+    // provider. The CRM record is created either way; see provider.device.js for
+    // what this costs (no recording, so no transcript and no AI analysis).
+    viaDevice: { type: 'boolean', default: false },
   }, { partial: true });
   if (!body.leadId && !body.toNumber) throw badRequest('Provide a leadId or a toNumber');
 
@@ -118,11 +122,14 @@ router.post('/', requirePermission('call:place'), asyncHandler(async (req, res) 
     dealId: body.dealId || null,
     toNumber: body.toNumber || null,
     recordingRequested: body.recordingRequested !== false,
+    viaDevice: body.viaDevice === true,
   });
 
   res.status(201).json({
     call: result.call,
     consent: result.consent,
+    // Present only for a device call: the number the handset should dial.
+    dialNumber: result.dialNumber,
     lead: result.lead ? crm.leadView(result.lead) : null,
     deal: result.deal ? crm.dealView(result.deal) : null,
     // Everything the in-call panel needs, so the agent never leaves the screen.

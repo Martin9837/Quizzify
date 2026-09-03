@@ -7,6 +7,7 @@ import config from '../../config.js';
 import logger from '../../lib/logger.js';
 import simulator from './provider.simulator.js';
 import twilio from './provider.twilio.js';
+import device from './provider.device.js';
 import { enqueue } from '../queue/index.js';
 import { emitToOrg, emitToUser } from '../realtime/index.js';
 import * as activity from '../activity.js';
@@ -16,7 +17,7 @@ import * as webhooks from '../webhooks.js';
 import { indexRecord } from '../search/index.js';
 import { orgSettings } from '../org.js';
 
-const providers = { simulator, twilio };
+const providers = { simulator, twilio, device };
 
 export function provider(name = config.telephony.provider) {
   return providers[name] || simulator;
@@ -120,7 +121,7 @@ export function toView(call) {
 }
 
 // --------------------------------------------------------- outbound calls ---
-export async function placeCall({ organizationId, agent, leadId = null, toNumber = null, recordingRequested = true, dealId = null }) {
+export async function placeCall({ organizationId, agent, leadId = null, toNumber = null, recordingRequested = true, dealId = null, viaDevice = false }) {
   const settings = orgSettings(organizationId);
   let lead = null;
 
@@ -139,9 +140,13 @@ export async function placeCall({ organizationId, agent, leadId = null, toNumber
   // A call is only recorded when the org allows it, the agent asked for it, and
   // consent is either not required or already on file for this contact.
   const consentOnFile = lead?.consent_recording === 'granted';
+  // A call placed on the agent's own handset can never be recorded -- the app has
+  // no access to the carrier audio -- so the request is overridden rather than
+  // recorded as an intention that was silently not honoured.
   const recordingEnabled = Boolean(
-    recordingRequested && consent.mode !== 'disabled' && (!consent.requiresConsent || consentOnFile),
+    !viaDevice && recordingRequested && consent.mode !== 'disabled' && (!consent.requiresConsent || consentOnFile),
   );
+  const providerName = viaDevice ? 'device' : config.telephony.provider;
 
   const activeDeal = dealId
     ? get('SELECT * FROM deals WHERE id = ? AND organization_id = ?', [dealId, organizationId])
@@ -159,7 +164,7 @@ export async function placeCall({ organizationId, agent, leadId = null, toNumber
     lead_id: lead?.id || null,
     deal_id: activeDeal?.id || null,
     agent_id: agent.id,
-    provider: config.telephony.provider,
+    provider: providerName,
     provider_call_id: null,
     direction: 'outbound',
     from_number: fromNumber,
@@ -184,7 +189,7 @@ export async function placeCall({ organizationId, agent, leadId = null, toNumber
 
   let dial;
   try {
-    dial = await provider().placeCall({
+    dial = await provider(providerName).placeCall({
       to: destination, from: fromNumber, callId, recordingEnabled,
     });
   } catch (error) {
@@ -199,7 +204,7 @@ export async function placeCall({ organizationId, agent, leadId = null, toNumber
 
   // The simulator advances on its own so the full pipeline is demo-able; a real
   // provider drives the same transitions through status webhooks.
-  if (provider().name === 'simulator') {
+  if (provider(providerName).name === 'simulator') {
     enqueue('call.simulate_progress', { callId, projectedOutcome: dial.projectedOutcome },
       { organizationId, delaySeconds: Math.max(1, dial.ringSeconds || 2), priority: 1 });
   }
@@ -214,6 +219,10 @@ export async function placeCall({ organizationId, agent, leadId = null, toNumber
     deal: activeDeal || null,
     consent,
     providerCallId: dial.providerCallId,
+    // The E.164 number the handset should dial. Only for a device call, where the
+    // client has to hand it to the system dialer; a provider call is already
+    // connected server-side and has no use for it.
+    dialNumber: viaDevice ? destination : null,
   };
 }
 
@@ -309,15 +318,28 @@ export async function endCall({ organizationId, callId, outcome = null, notes = 
   const endedAt = nowIso();
   const startedAt = call.started_at || endedAt;
   const duration = secondsBetween(startedAt, endedAt);
-  const talk = call.answered_at ? Math.max(0, secondsBetween(call.answered_at, endedAt) - (call.hold_seconds || 0)) : 0;
-  const finalStatus = call.answered_at ? status : status === 'completed' ? 'no_answer' : status;
-  const finalOutcome = outcome || (call.answered_at ? 'connected' : finalStatus === 'voicemail' ? 'voicemail' : 'no_answer');
+
+  // On a device call the carrier tells us nothing, so answered_at is never set and
+  // the agent is the only witness to what happened. Take them at their word when
+  // they report a conversation, or the CRM would file every call they made from
+  // their own handset as a no-answer. Provider calls are untouched: there the
+  // provider observed the call and a claimed outcome must not overwrite it.
+  //
+  // Talk time is then the whole handoff window rather than true connected time,
+  // which is the closest thing available -- nothing reports when the callee
+  // actually picked up.
+  const answeredAt = call.answered_at
+    || (call.provider === 'device' && outcome === 'connected' ? startedAt : null);
+  const talk = answeredAt ? Math.max(0, secondsBetween(answeredAt, endedAt) - (call.hold_seconds || 0)) : 0;
+
+  const finalStatus = answeredAt ? status : status === 'completed' ? 'no_answer' : status;
+  const finalOutcome = outcome || (answeredAt ? 'connected' : finalStatus === 'voicemail' ? 'voicemail' : 'no_answer');
 
   transaction(() => {
     run(
-      `UPDATE calls SET status = ?, outcome = ?, ended_at = ?, duration_seconds = ?, talk_seconds = ?,
-         notes = COALESCE(?, notes), on_hold = 0, updated_at = ? WHERE id = ?`,
-      [finalStatus, finalOutcome, endedAt, duration, talk, notes, endedAt, callId],
+      `UPDATE calls SET status = ?, outcome = ?, answered_at = ?, ended_at = ?, duration_seconds = ?,
+         talk_seconds = ?, notes = COALESCE(?, notes), on_hold = 0, updated_at = ? WHERE id = ?`,
+      [finalStatus, finalOutcome, answeredAt, endedAt, duration, talk, notes, endedAt, callId],
     );
     if (call.lead_id) {
       const lead = get('SELECT * FROM leads WHERE id = ?', [call.lead_id]);

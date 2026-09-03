@@ -118,3 +118,88 @@ describe('calling', () => {
     assert.ok(result.body.matches[0].highlights.length > 0);
   });
 });
+
+describe('calls placed on the agent handset', () => {
+  const callableLead = async (api) => {
+    const lead = (await api.get('/leads?limit=20')).body.leads.find((entry) => entry.phone && !entry.doNotCall);
+    assert.ok(lead, 'need a callable lead');
+    return lead;
+  };
+
+  it('creates the CRM record and returns a number for the handset to dial', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    const lead = await callableLead(api);
+
+    const { status, body } = await api.post('/calls', { leadId: lead.id, viaDevice: true });
+    assert.equal(status, 201);
+    assert.equal(body.call.leadId, lead.id, 'a handset call still associates to the lead');
+    assert.equal(body.call.provider, 'device');
+    assert.ok(body.dialNumber, 'the client needs a dialable number');
+    assert.match(body.dialNumber, /^\+\d{6,}$/, 'the dial number should be E.164');
+  });
+
+  it('is never recorded, whatever the caller asks for', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    const lead = await callableLead(api);
+
+    const { body } = await api.post('/calls', { leadId: lead.id, viaDevice: true, recordingRequested: true });
+    assert.equal(body.call.recordingEnabled, false, 'the handset gives the app no audio to record');
+
+    const ended = await api.post(`/calls/${body.call.id}/end`, { outcome: 'connected' });
+    assert.equal(ended.body.pipelineQueued, false, 'nothing to transcribe');
+    assert.equal(ended.body.skipReason, 'not_recorded');
+  });
+
+  it('does not return a dial number for a provider call', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    const lead = await callableLead(api);
+    const { body } = await api.post('/calls', { leadId: lead.id });
+    assert.equal(body.dialNumber, null);
+    assert.notEqual(body.call.provider, 'device');
+  });
+
+  it('records a conversation the agent reports, rather than filing it as no answer', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    const lead = await callableLead(api);
+
+    // Nothing calls /answer: a carrier never reports back, which is exactly the
+    // case that used to be stored as a no-answer.
+    const { body } = await api.post('/calls', { leadId: lead.id, viaDevice: true });
+    const ended = await api.post(`/calls/${body.call.id}/end`, { outcome: 'connected', notes: 'Asked for pricing' });
+
+    assert.equal(ended.body.call.outcome, 'connected');
+    assert.equal(ended.body.call.status, 'completed');
+    assert.ok(ended.body.call.answeredAt, 'a reported conversation should have an answered time');
+    assert.equal(ended.body.call.notes, 'Asked for pricing');
+  });
+
+  it('still files an unanswered handset call as no answer', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    const lead = await callableLead(api);
+    const { body } = await api.post('/calls', { leadId: lead.id, viaDevice: true });
+    const ended = await api.post(`/calls/${body.call.id}/end`, { outcome: 'no_answer' });
+
+    assert.equal(ended.body.call.outcome, 'no_answer');
+    assert.equal(ended.body.call.status, 'no_answer');
+    assert.equal(ended.body.call.answeredAt, null, 'no conversation, so no answered time');
+  });
+
+  it('still refuses a do-not-call contact', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    const blocked = (await api.get('/leads?limit=100')).body.leads.find((entry) => entry.doNotCall);
+    if (!blocked) return; // seeded data always has one, but do not fail if not
+    const { status } = await api.post('/calls', { leadId: blocked.id, viaDevice: true });
+    assert.equal(status, 409, 'the handset route must not bypass the do-not-call list');
+  });
+
+  it('marks the lead contacted, so follow-up logic sees the call', async () => {
+    const { api } = await login(ACCOUNTS.agent);
+    const lead = await callableLead(api);
+    const { body } = await api.post('/calls', { leadId: lead.id, viaDevice: true });
+    await api.post(`/calls/${body.call.id}/end`, { outcome: 'connected' });
+    await drain();
+
+    const after = (await api.get(`/leads/${lead.id}`)).body.lead;
+    assert.ok(after.lastContactedAt, 'a handset call is still contact');
+  });
+});
