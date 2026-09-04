@@ -161,7 +161,14 @@ export default function Team() {
       {tab === 'performance' && (
         <>
           <Card title="Agent leaderboard" flush>
-            <DataTable columns={columns} rows={sellers} empty={<EmptyState title="No agent activity in this period" />} />
+            {/* These rows are per-agent aggregates keyed by userId, not records
+                with an id, so the identity has to be named explicitly. */}
+            <DataTable
+              columns={columns}
+              rows={sellers}
+              rowKey={(agent) => agent.userId}
+              empty={<EmptyState title="No agent activity in this period" />}
+            />
           </Card>
           <div className="grid grid-2">
             <Card title="Pipeline by stage">
@@ -263,6 +270,7 @@ export default function Team() {
         <Card title="Deals at risk across the team">
           {!dealsAtRisk.length ? <EmptyState title="Nothing flagged" message="Every open deal has recent contact and a next step." /> : (
             <DataTable
+              rowKey={(deal) => deal.dealId}
               columns={[
                 { key: 'name', label: 'Deal', render: (deal) => <Link to={`/pipeline?deal=${deal.dealId}`} className="cell-primary">{deal.name}</Link> },
                 { key: 'owner', label: 'Owner', render: (deal) => <span className="small">{deal.ownerName || '--'}</span> },

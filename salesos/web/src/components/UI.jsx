@@ -414,6 +414,25 @@ export function useToast() {
 export function DataTable({ columns, rows, onRowClick, empty, rowKey = (row) => row.id, selected, onSelect, sort, onSort }) {
   if (!rows?.length) return empty || <EmptyState title="Nothing here yet" />;
   const selectable = Boolean(onSelect);
+
+  // React's own warning for this says only "check the render method of
+  // DataTable", which is the one place the problem is not. The default key is
+  // row.id, and aggregate rows often identify themselves differently -- userId,
+  // dealId -- so every key comes out undefined, React cannot tell the rows
+  // apart, and selection or input state can attach to the wrong one after a
+  // sort or a refetch. Name the offending table instead.
+  if (import.meta.env.DEV) {
+    const keys = rows.map(rowKey);
+    const missing = keys.some((key) => key === undefined || key === null);
+    const duplicated = new Set(keys).size !== keys.length;
+    if (missing || duplicated) {
+      console.error(
+        `DataTable [${columns.map((c) => c.key).join(', ')}] has ${missing ? 'undefined' : 'duplicate'} row keys. `
+        + 'Pass rowKey to name the field that identifies a row.',
+        { sampleRow: rows[0] },
+      );
+    }
+  }
   const allSelected = selectable && rows.every((row) => selected?.includes(rowKey(row)));
 
   return (

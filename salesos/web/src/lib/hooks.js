@@ -32,8 +32,18 @@ export function useApi(path, query, { enabled = true, deps = [] } = {}) {
     }
   }
 
-  useEffect(() => () => {
-    mounted.current = false;
+  // Set on mount as well as cleared on unmount. Clearing alone looks harmless
+  // but latches: React 18 mounts, cleans up, then mounts again in development,
+  // so the flag went false and stayed there. The first request was aborted by
+  // that cleanup and the second one succeeded -- and its result was then thrown
+  // away by the `mounted.current` check below, leaving every screen on its
+  // loading spinner for good. Production builds do not double-invoke effects,
+  // which is why this only ever appeared under `npm run dev`.
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   const load = useCallback(async (signal) => {
