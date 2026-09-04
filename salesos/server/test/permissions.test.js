@@ -131,3 +131,62 @@ describe('the admin panel across roles', () => {
     assert.equal((await api.get('/admin/users')).status, 403);
   });
 });
+
+describe('organisation settings that change behaviour', () => {
+  // These values are read at decision time, so a stored nonsense value changes
+  // what the product does while the admin screen reports it back as accepted.
+  // The dangerous one is a negative confidence threshold: in auto mode every
+  // suggestion clears it, so a typo turns the confidence floor off entirely and
+  // the AI writes to the CRM unreviewed.
+  //
+  // Signing in once and reusing the session: the auth limiter has a deliberately
+  // tight budget, and a login per assertion trips it.
+  let admin;
+  let owner;
+  before(async () => {
+    admin = (await login(ACCOUNTS.admin)).api;
+    owner = (await login(ACCOUNTS.owner)).api;
+  });
+
+  const patchApproval = (api, crmApproval) => api.patch('/admin/settings', { settings: { crmApproval } });
+
+  it('refuses an unrecognised approval mode', async () => {
+    for (const mode of ['automatic', 'banana', '', 123, null]) {
+      const { status } = await patchApproval(admin, { mode });
+      assert.equal(status, 422, `mode ${JSON.stringify(mode)} should be refused, got ${status}`);
+    }
+  });
+
+  it('refuses a confidence threshold outside 0..1', async () => {
+    for (const value of [5, -1, 'high', null]) {
+      const { status } = await patchApproval(admin, { autoApplyConfidenceThreshold: value });
+      assert.equal(status, 422, `threshold ${JSON.stringify(value)} should be refused, got ${status}`);
+    }
+  });
+
+  it('refuses a non-boolean for the approval switches', async () => {
+    assert.equal((await patchApproval(admin, { autoCreateTasks: 'yes' })).status, 422);
+  });
+
+  it('refuses an unrecognised recording consent mode', async () => {
+    const { status } = await admin.patch('/admin/settings', { settings: { recording: { consentMode: 'sometimes' } } });
+    assert.equal(status, 422, `got ${status}`);
+  });
+
+  it('still accepts the documented values', async () => {
+    const { status, body } = await patchApproval(admin, {
+      mode: 'suggest', autoApplyConfidenceThreshold: 0.9, autoCreateTasks: true,
+    });
+    assert.equal(status, 200);
+    assert.equal(body.settings.crmApproval.mode, 'suggest');
+    assert.equal(body.settings.crmApproval.autoApplyConfidenceThreshold, 0.9);
+  });
+
+  it('keeps fully automatic CRM updates a super-admin decision', async () => {
+    assert.equal((await patchApproval(admin, { mode: 'auto' })).status, 403);
+    assert.equal((await patchApproval(admin, { alwaysReviewSensitive: false })).status, 403);
+    assert.equal((await patchApproval(owner, { mode: 'auto' })).status, 200);
+    // Put it back so later tests see the safe default.
+    assert.equal((await patchApproval(owner, { mode: 'suggest' })).status, 200);
+  });
+});

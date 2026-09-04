@@ -45,7 +45,55 @@ function sameValue(a, b) {
 }
 
 /** Map the analysis `extraction` block onto concrete field changes. */
+/**
+ * Did this call actually yield anything to reason from?
+ *
+ * A transcript can come back empty or near-empty for ordinary reasons: silence,
+ * hold music, a voicemail beep, a failed speech-to-text run. The per-field
+ * guards in propose() below all passed such a call happily, because each only
+ * asks whether ITS value is present -- and the derived defaults (a temperature
+ * of cold, a recomputed score, a follow-up three days out) are always present.
+ * The result was three confident CRM changes, at 0.70-0.76 confidence and with
+ * no evidence, extracted from nothing. Under an automatic approval policy with a
+ * threshold below that, they would have applied themselves: a real lead marked
+ * cold and rescored because a call captured no audio.
+ *
+ * So the question is asked once, up front, against the shared analysis contract
+ * rather than either engine's internals -- which keeps it true for the local
+ * engine and a model alike. Anything a real conversation produces trips at least
+ * one of these; a silent one trips none.
+ */
+function analysisHasSubstance(analysis) {
+  if (!analysis) return false;
+
+  // action_items is excluded deliberately: the engine always emits a generic
+  // "Follow up on the conversation" entry, so its presence says nothing about
+  // whether anyone spoke. Everything else here only appears if something was
+  // actually said.
+  const spoken = ['key_points', 'objections', 'buying_signals', 'risks',
+    'commitments', 'next_steps', 'topics', 'questions', 'competitors'];
+  if (spoken.some((key) => Array.isArray(analysis[key]) && analysis[key].length > 0)) return true;
+
+  // Within the extraction block the same distinction applies. customer_interest,
+  // lead_temperature, deal_stage and follow_up_date are judgements the engine
+  // always reaches -- for a silent call it reaches "none", "cold", "contacted"
+  // and a date three days out. The fields below are things a customer has to
+  // have told us.
+  const STATED = ['budget', 'budget_evidence', 'timeline', 'decision_maker',
+    'pain_points', 'requirements', 'expected_value', 'next_action', 'competitors',
+    'company_size', 'lost_reason', 'product_discussed', 'job_title', 'industry'];
+  const extracted = analysis.extraction || {};
+  return STATED.some((key) => {
+    const value = extracted[key];
+    return Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined && value !== '';
+  });
+}
+
 export function buildSuggestions({ analysis, lead, deal, callDate = nowIso() }) {
+  // Nothing was said, so there is nothing to propose. Returning early is the
+  // honest answer; the alternative is inventing CRM updates for a silent call.
+  if (!analysisHasSubstance(analysis)) return [];
+
   const extraction = analysis?.extraction || {};
   const confidences = analysis?.field_confidence || {};
   const candidates = [];
@@ -98,7 +146,14 @@ export function buildSuggestions({ analysis, lead, deal, callDate = nowIso() }) 
         field: 'next_follow_up_at',
         value: iso,
         confidence: confidences.follow_up_date ?? 0.7,
-        rationale: extraction.timeline ? `Customer indicated a ${extraction.timeline} timeline.` : 'Derived from the agreed next step.',
+        // Only claim a next step when one was actually captured -- this used to
+        // assert "the agreed next step" as a bare fallback, so a date derived
+        // from nothing came with a rationale that was simply untrue.
+        rationale: extraction.timeline
+          ? `Customer indicated a ${extraction.timeline} timeline.`
+          : analysis.next_steps?.length
+            ? 'Derived from the agreed next step.'
+            : 'Suggested from the timing of this call; no follow-up date was stated.',
         evidence: quote(analysis.next_steps?.[0]),
       });
     }

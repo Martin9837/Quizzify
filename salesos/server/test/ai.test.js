@@ -377,3 +377,73 @@ describe('evidence quality', () => {
     }
   });
 });
+
+describe('a call that captured nothing', () => {
+  // A transcript comes back empty for ordinary reasons: silence, hold music, a
+  // voicemail beep, a speech-to-text run that failed. The engine still reaches
+  // its default judgements from it -- interest "none", temperature "cold", a
+  // stage of "contacted", a date three days out -- and those used to become
+  // three CRM suggestions at 0.70-0.76 confidence with no evidence attached.
+  // Under an automatic approval policy with a threshold below that, they would
+  // have applied themselves: a real lead marked cold and rescored because a
+  // call recorded no audio.
+  const lead = {
+    id: 'lead_empty_probe', first_name: 'Dana', last_name: 'Reyes',
+    company_name: 'Acme', country: 'US',
+  };
+  const analyse = (segments) => analyseTranscript({
+    segments, fullText: segments.map((s) => s.text).join('\n'),
+    lead, deal: null, callDate: '2026-03-02T10:00:00Z',
+  });
+
+  it('proposes no CRM updates when there was no conversation', () => {
+    const suggestions = buildSuggestions({
+      analysis: analyse([]), lead, deal: null, callDate: '2026-03-02T10:00:00Z',
+    });
+    assert.equal(suggestions.length, 0,
+      `expected nothing from a silent call, got: ${suggestions.map((s) => s.field).join(', ')}`);
+  });
+
+  it('proposes nothing from noise that carries no statement', () => {
+    for (const segments of [
+      [],
+      [{ role: 'agent', text: 'Hello? Hello?' }],
+      [{ role: 'customer', text: '...' }, { role: 'agent', text: '---' }],
+    ]) {
+      const suggestions = buildSuggestions({
+        analysis: analyse(segments), lead, deal: null, callDate: '2026-03-02T10:00:00Z',
+      });
+      assert.equal(suggestions.length, 0,
+        `expected nothing, got: ${suggestions.map((s) => s.field).join(', ')}`);
+    }
+  });
+
+  it('still proposes updates when the customer actually said something', () => {
+    // The guard must not be so broad that it silences real calls.
+    const suggestions = buildSuggestions({
+      analysis: analyse([
+        { role: 'agent', text: 'What is holding you back?' },
+        { role: 'customer', text: 'The price is higher than we budgeted for this year.' },
+        { role: 'customer', text: 'We have about fifty thousand dollars and need it live by the end of Q3.' },
+      ]),
+      lead,
+      deal: null,
+      callDate: '2026-03-02T10:00:00Z',
+    });
+    assert.ok(suggestions.length > 0, 'a real conversation must still produce suggestions');
+  });
+
+  it('never claims a next step that was not agreed', () => {
+    // The follow-up date used to carry "Derived from the agreed next step" as a
+    // bare fallback, asserting something the transcript did not contain.
+    const analysis = analyse([
+      { role: 'customer', text: 'Our main pain point is manual data entry across three systems.' },
+    ]);
+    const suggestions = buildSuggestions({ analysis, lead, deal: null, callDate: '2026-03-02T10:00:00Z' });
+    const followUp = suggestions.find((s) => s.field === 'next_follow_up_at');
+    if (followUp && !analysis.next_steps?.length) {
+      assert.ok(!/agreed next step/i.test(followUp.rationale),
+        `rationale claims a next step that does not exist: "${followUp.rationale}"`);
+    }
+  });
+});
