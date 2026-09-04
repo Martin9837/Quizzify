@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import config from '../config.js';
 import logger from '../lib/logger.js';
+import { badRequest } from '../lib/errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -48,8 +49,36 @@ export function get(sql, params = []) {
   return row ? plain(row) : undefined;
 }
 
+/**
+ * A write, with one error translated.
+ *
+ * Several fields on create and update payloads are ids the caller supplies:
+ * ownerId on a lead or deal, leadId on a task, teamId on a user. A well-formed
+ * id that simply does not exist used to reach SQLite and come back as an
+ * unhandled `FOREIGN KEY constraint failed`, which the error handler could only
+ * report as a 500 -- telling a client its own bad input was a server fault, and
+ * logging a stack trace for something that is not a defect.
+ *
+ * Translating it here rather than adding an existence check to each route means
+ * the guarantee holds for every write, including ones written later. Routes that
+ * want a more specific message (`notFound('Lead')`, say) still check first and
+ * are unaffected; this is the floor, not the policy.
+ *
+ * If our own code ever inserts a genuinely bad reference this returns 400 rather
+ * than 500, which slightly understates a real bug -- but the message is accurate
+ * either way and the detail is still logged, which beats a stack trace reaching
+ * the client.
+ */
 export function run(sql, params = []) {
-  return getDb().prepare(sql).run(...normalise(params));
+  try {
+    return getDb().prepare(sql).run(...normalise(params));
+  } catch (error) {
+    if (/FOREIGN KEY constraint failed/i.test(error.message)) {
+      logger.debug('foreign key constraint rejected a write', { sql: sql.slice(0, 120) });
+      throw badRequest('One of the records this refers to does not exist. Check any id you supplied.');
+    }
+    throw error;
+  }
 }
 
 export function exec(sql) {

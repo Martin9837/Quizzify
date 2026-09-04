@@ -203,3 +203,41 @@ describe('calls placed on the agent handset', () => {
     assert.ok(after.lastContactedAt, 'a handset call is still contact');
   });
 });
+
+describe('the do-not-call list', () => {
+  const blockedLead = async (api) => {
+    const lead = (await api.get('/leads?limit=200')).body.leads.find((entry) => entry.doNotCall);
+    assert.ok(lead, 'the seeded dataset should contain a do-not-call contact');
+    return lead;
+  };
+
+  it('refuses a call placed by lead', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const lead = await blockedLead(api);
+    assert.equal((await api.post('/calls', { leadId: lead.id })).status, 409);
+  });
+
+  it('refuses a call placed on the handset', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const lead = await blockedLead(api);
+    assert.equal((await api.post('/calls', { leadId: lead.id, viaDevice: true })).status, 409);
+  });
+
+  it('refuses a call dialled by raw number, not just by lead', async () => {
+    // The check used to run before the number was resolved back to a contact,
+    // so dialling the number instead of naming the lead bypassed it entirely.
+    // Typing a number in is precisely how someone reaches a number they should
+    // not be calling, and this is a legal control rather than a convenience.
+    const { api } = await login(ACCOUNTS.admin);
+    const lead = await blockedLead(api);
+    assert.ok(lead.phone, 'the blocked contact needs a number to dial');
+    const { status } = await api.post('/calls', { toNumber: lead.phone });
+    assert.equal(status, 409, 'dialling a flagged number directly must still be refused');
+  });
+
+  it('still allows a number that belongs to nobody on the list', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const { status } = await api.post('/calls', { toNumber: '+15550009999' });
+    assert.equal(status, 201, 'an unflagged number must remain callable');
+  });
+});

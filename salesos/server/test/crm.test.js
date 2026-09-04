@@ -141,3 +141,67 @@ describe('deals and pipeline', () => {
     assert.equal(Math.round(summed), Math.round(body.totals.openValue));
   });
 });
+
+describe('a caller-supplied id that does not exist', () => {
+  // These fields are ids the client sends: a typo, a stale id from a cached
+  // page, or a deleted record all produce a well-formed value that no longer
+  // resolves. Every one of them used to reach SQLite and come back as an
+  // unhandled FOREIGN KEY constraint failure, which the error handler could
+  // only report as a 500 -- blaming the server for the client's own input and
+  // logging a stack trace for something that is not a defect.
+  const GHOST_USER = 'user_ghost000000';
+  const GHOST_LEAD = 'lead_ghost000000';
+  const GHOST_TEAM = 'team_ghost000000';
+
+  const isClientError = (status) => status >= 400 && status < 500;
+
+  it('is a client error when creating a lead with an unknown owner', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const { status } = await api.post('/leads', {
+      firstName: 'Ghost', lastName: 'Owner', email: 'ghost.owner@example.com', ownerId: GHOST_USER,
+    });
+    assert.ok(isClientError(status), `expected 4xx, got ${status}`);
+  });
+
+  it('is a client error when reassigning a lead to an unknown owner', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const lead = (await api.get('/leads?limit=1')).body.leads[0];
+    const { status } = await api.patch(`/leads/${lead.id}`, { ownerId: GHOST_USER });
+    assert.ok(isClientError(status), `expected 4xx, got ${status}`);
+  });
+
+  it('is a client error when creating a deal with an unknown owner', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const lead = (await api.get('/leads?limit=1')).body.leads[0];
+    const { status } = await api.post('/deals', {
+      name: 'Ghost Owner Deal', leadId: lead.id, ownerId: GHOST_USER, stage: 'qualified', value: 1000,
+    });
+    assert.ok(isClientError(status), `expected 4xx, got ${status}`);
+  });
+
+  it('is a client error when creating a task against an unknown lead', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const { status } = await api.post('/tasks', {
+      title: 'Ghost Lead Task', leadId: GHOST_LEAD, dueAt: '2027-01-01T00:00:00Z',
+    });
+    assert.ok(isClientError(status), `expected 4xx, got ${status}`);
+  });
+
+  it('is a client error when creating a user on an unknown team', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const { status } = await api.post('/admin/users', {
+      name: 'Ghost Team User', email: 'ghost.team@example.com', role: 'agent', teamId: GHOST_TEAM,
+    });
+    assert.ok(isClientError(status), `expected 4xx, got ${status}`);
+  });
+
+  it('still succeeds with a real owner, so the guard is not over-broad', async () => {
+    const { api } = await login(ACCOUNTS.admin);
+    const me = (await api.get('/auth/me')).body;
+    const ownerId = me.user?.id ?? me.id;
+    const { status } = await api.post('/leads', {
+      firstName: 'Real', lastName: 'Owner', email: 'real.owner@example.com', ownerId,
+    });
+    assert.equal(status, 201);
+  });
+});

@@ -131,9 +131,16 @@ export async function placeCall({ organizationId, agent, leadId = null, toNumber
   }
   const destination = toE164(toNumber || lead?.phone_e164 || lead?.phone, lead?.country || 'US');
   if (!destination) throw badRequest('A destination phone number is required');
-  if (lead?.do_not_call) throw conflict('This contact is on the do-not-call list');
 
+  // Resolve the contact by number BEFORE the do-not-call check, not after.
+  // With the check first, dialling a flagged contact's raw number instead of
+  // naming the lead skipped it entirely -- `lead` was still null when the check
+  // ran, so it passed, and the association was only made afterwards. Dialling a
+  // typed-in number is exactly how someone would reach a number they should not
+  // be calling, and do-not-call is a legal control rather than a convenience.
   if (!lead) lead = findLeadByNumber(organizationId, destination);
+
+  if (lead?.do_not_call) throw conflict('This contact is on the do-not-call list');
 
   const country = lead?.country || countryFromE164(destination);
   const consent = resolveConsentPolicy(settings, { country, region: lead?.location });
