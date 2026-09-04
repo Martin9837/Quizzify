@@ -1,0 +1,115 @@
+# Builds an unsigned SalesOS .ipa on a GitHub-hosted macOS runner.
+#
+# Why CI: an .ipa contains a compiled ARM64 Mach-O binary, and only Apple's
+# toolchain can produce one, which only runs on macOS. This is how the file gets
+# built without needing a Mac and Xcode locally.
+#
+# The .ipa is deliberately UNSIGNED. Sideloadly (and AltStore, and Xcode) re-sign
+# with your own Apple ID at install time, so a signed build here would only be
+# thrown away -- and signing would need certificates this workflow has no
+# business holding.
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [claude/ai-sales-crm-calling-bfnaqx]
+    paths:
+      - 'salesos/ios/**'
+      - 'salesos/web/**'
+      - 'salesos/package.json'
+      - 'salesos/capacitor.config.json'
+      - '.github/workflows/ios-ipa.yml'
+  workflow_dispatch:
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          echo "available SDKs:"; xcodebuild -showsdks | grep -i ios || true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: salesos
+        run: npm install
+
+      - name: Build the web client
+        working-directory: salesos
+        run: npm run build
+
+      - name: Copy the web build into the iOS project
+        working-directory: salesos
+        run: npx cap sync ios
+
+      - name: Build App.app (Release, unsigned, device arm64)
+        working-directory: salesos/ios/App
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tail -60
+
+      - name: Package into an .ipa
+        id: package
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app"
+          test -d "$APP" || { echo "App.app was not produced at $APP"; exit 1; }
+
+          # An .ipa is a zip whose single top-level directory is Payload/.
+          WORK="$RUNNER_TEMP/pkg"
+          rm -rf "$WORK"; mkdir -p "$WORK/Payload"
+          cp -R "$APP" "$WORK/Payload/"
+          ( cd "$WORK" && zip -qry "$RUNNER_TEMP/SalesOS.ipa" Payload )
+          mv "$RUNNER_TEMP/SalesOS.ipa" ./SalesOS.ipa
+          echo "path=SalesOS.ipa" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the .ipa is real
+        run: |
+          set -euo pipefail
+          echo "size: $(du -h SalesOS.ipa | cut -f1)"
+          echo
+          echo "--- archive layout ---"
+          unzip -l SalesOS.ipa | head -20
+          echo
+          # The whole point of the exercise: a genuine arm64 iOS executable.
+          BIN="$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app/App"
+          echo "--- executable ---"
+          file "$BIN"
+          file "$BIN" | grep -q "arm64" || { echo "NOT an arm64 binary"; exit 1; }
+          echo
+          echo "--- bundle id and version ---"
+          PLIST="$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app/Info.plist"
+          plutil -extract CFBundleIdentifier raw "$PLIST"
+          plutil -extract CFBundleShortVersionString raw "$PLIST"
+          echo
+          echo "--- the web client is inside the bundle ---"
+          test -f "$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app/public/index.html" \
+            && echo "public/index.html present" || { echo "web assets MISSING"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SalesOS-unsigned-ipa
+          path: SalesOS.ipa
+          if-no-files-found: error
+          retention-days: 30
