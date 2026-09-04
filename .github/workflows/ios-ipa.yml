@@ -87,25 +87,55 @@ jobs:
       - name: Verify the .ipa is real
         run: |
           set -euo pipefail
+          APP="$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app"
           echo "size: $(du -h SalesOS.ipa | cut -f1)"
           echo
-          echo "--- archive layout ---"
-          unzip -l SalesOS.ipa | head -20
+          echo "--- what is in the bundle ---"
+          unzip -l SalesOS.ipa
+
+          # A genuine arm64 iOS executable is the whole reason this runs on macOS.
           echo
-          # The whole point of the exercise: a genuine arm64 iOS executable.
-          BIN="$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app/App"
           echo "--- executable ---"
-          file "$BIN"
-          file "$BIN" | grep -q "arm64" || { echo "NOT an arm64 binary"; exit 1; }
+          file "$APP/App"
+          file "$APP/App" | grep -q "arm64" || { echo "FAIL: not an arm64 binary"; exit 1; }
+
           echo
-          echo "--- bundle id and version ---"
-          PLIST="$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app/Info.plist"
-          plutil -extract CFBundleIdentifier raw "$PLIST"
-          plutil -extract CFBundleShortVersionString raw "$PLIST"
+          echo "--- identity ---"
+          plutil -extract CFBundleIdentifier raw "$APP/Info.plist"
+          plutil -extract CFBundleShortVersionString raw "$APP/Info.plist"
+
+          # Without this the app cannot reach a self-hosted server over plain
+          # HTTP on a LAN address, and the failure on device is silent.
           echo
-          echo "--- the web client is inside the bundle ---"
-          test -f "$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/App.app/public/index.html" \
-            && echo "public/index.html present" || { echo "web assets MISSING"; exit 1; }
+          echo "--- App Transport Security ---"
+          plutil -extract NSAppTransportSecurity.NSAllowsLocalNetworking raw "$APP/Info.plist" \
+            || { echo "FAIL: NSAllowsLocalNetworking missing -- a LAN server would be unreachable"; exit 1; }
+
+          # The shell is useless without the web client. index.html alone is not
+          # enough: it is the hashed JS bundle that actually boots the app, and a
+          # bundle that failed to copy installs fine and then opens to a blank
+          # white screen.
+          echo
+          echo "--- web client ---"
+          test -f "$APP/public/index.html" || { echo "FAIL: public/index.html missing"; exit 1; }
+          ls -la "$APP/public/assets/" || { echo "FAIL: public/assets/ missing"; exit 1; }
+
+          JS=$(ls "$APP/public/assets/"*.js 2>/dev/null | head -1)
+          CSS=$(ls "$APP/public/assets/"*.css 2>/dev/null | head -1)
+          test -n "$JS" || { echo "FAIL: no JS bundle in the app"; exit 1; }
+          test -n "$CSS" || { echo "FAIL: no stylesheet in the app"; exit 1; }
+
+          JS_BYTES=$(stat -f%z "$JS")
+          echo "JS bundle: $(basename "$JS") -- $JS_BYTES bytes"
+          test "$JS_BYTES" -gt 300000 || { echo "FAIL: JS bundle is implausibly small"; exit 1; }
+
+          # And that index.html actually points at the bundle that shipped.
+          grep -q "$(basename "$JS")" "$APP/public/index.html" \
+            || { echo "FAIL: index.html does not reference the bundled JS"; exit 1; }
+          echo "index.html references the bundled JS"
+
+          echo
+          echo "All checks passed -- this .ipa contains a working app."
 
       - uses: actions/upload-artifact@v4
         with:
