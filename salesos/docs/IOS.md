@@ -56,6 +56,13 @@ blocks plain HTTP, so `Info.plist` sets `NSAllowsLocalNetworking`, which permits
 HTTP to private and `.local` addresses only. ATS still applies in full to the
 public internet: **a server reached over the internet must use HTTPS.**
 
+A bare host with no port — `192.168.1.20` — is filled in as port 4000, the port
+the API defaults to, because leaving the port off is the most common way to get
+this wrong and port 80 is never where a self-hosted SalesOS listens. An address
+typed with a scheme is taken as given: `https://sales.example.com` is a complete
+origin and no port is added, so a reverse-proxied install is not broken by the
+convenience. If your server prints a different port on startup, type it.
+
 **The server has to allow the app's origin.** Capacitor loads the bundle from
 `capacitor://localhost`, so every API call from the app is cross-origin. That
 origin is allowed by default (see `NATIVE_APP_ORIGINS` in `server/src/app.js`) —
@@ -64,9 +71,13 @@ bearer token and a native app is not bound by CORS regardless. If you point the
 app at a server behind a proxy that strips or overrides CORS, add the origin to
 `WEB_ORIGINS`.
 
-If the setup screen says it cannot reach the address, those are the two things to
-check. A CORS refusal and an unreachable host are indistinguishable to the web
-platform, so the message names both.
+If the setup screen cannot reach the address it echoes the address it actually
+tried, which is the address after that normalisation rather than the characters
+typed, and names the likeliest causes in order: the server not running, the wrong
+port, then the phone being on a different network. CORS is mentioned last because
+on a self-hosted app it is the rarest of the four — and because a CORS refusal and
+an unreachable host are indistinguishable to the web platform, so the message can
+only rank causes, not identify one.
 
 ## What is native and what is not
 
