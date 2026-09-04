@@ -87,6 +87,15 @@ The phone has to be able to reach the server, which means one of:
 `npm run dev` already binds to all interfaces, so `http://<your-machine-ip>:5173`
 works from a phone on the same network without extra flags.
 
+If either port is already taken, `npm run dev` says so and stops rather than
+starting half of itself. To run alongside whatever owns them:
+
+```bash
+PORT=4001 WEB_PORT=5174 npm run dev
+```
+
+`PORT` moves the API and the dev proxy together.
+
 ### What the service worker does and does not cache
 
 It caches the app shell and the content-hashed build assets, and nothing else.

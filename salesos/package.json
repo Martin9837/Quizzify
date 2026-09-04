@@ -2,6 +2,7 @@
   "name": "salesos",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "SalesOS - AI Sales Operating System: CRM + calling + conversation intelligence",
   "workspaces": [
     "server",
