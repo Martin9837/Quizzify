@@ -124,14 +124,29 @@ router.get('/suggestions', requirePermission('ai:suggestion:approve'), asyncHand
   }
 
   // Attach the originating call so the agent has context for each batch.
-  const enriched = [...batches.values()].map((batch) => {
-    if (batch.sourceType !== 'call') return batch;
-    const call = get(
+  //
+  // One query for all the batches rather than one per batch. The ids go in as a
+  // JSON array so the statement takes a single bound parameter however many
+  // batches there are, which keeps it inside the bound-parameter ceilings that
+  // hosted SQLite engines impose and off the N+1 path this used to be: at a
+  // page of 100 suggestions the handler issued 24 queries instead of 3.
+  const callIds = [...batches.values()]
+    .filter((batch) => batch.sourceType === 'call')
+    .map((batch) => batch.sourceId);
+  const callsById = new Map();
+  if (callIds.length) {
+    const rows = all(
       `SELECT c.id, c.started_at, l.first_name, l.last_name, l.company_name, a.summary
        FROM calls c LEFT JOIN leads l ON l.id = c.lead_id LEFT JOIN call_analyses a ON a.call_id = c.id
-       WHERE c.id = ?`,
-      [batch.sourceId],
+       WHERE c.id IN (SELECT value FROM json_each(?))`,
+      [callIds],
     );
+    for (const row of rows) callsById.set(row.id, row);
+  }
+
+  const enriched = [...batches.values()].map((batch) => {
+    if (batch.sourceType !== 'call') return batch;
+    const call = callsById.get(batch.sourceId);
     return {
       ...batch,
       source: call ? {

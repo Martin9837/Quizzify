@@ -1,5 +1,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import { start, stop, login, ACCOUNTS } from './helpers.js';
 import { drain } from '../src/services/queue/index.js';
 import { analyseTranscript } from '../src/services/ai/local-engine.js';
@@ -445,5 +446,74 @@ describe('a call that captured nothing', () => {
       assert.ok(!/agreed next step/i.test(followUp.rationale),
         `rationale claims a next step that does not exist: "${followUp.rationale}"`);
     }
+  });
+});
+
+describe('suggestion review does not scale its query count with the page', () => {
+  /**
+   * The review panel enriches each batch with the call it came from. That was
+   * a query per batch, which is invisible against a local database file and
+   * decisive against a networked one -- a page of 100 suggestions issued 24
+   * queries where it should issue 3. The count is asserted rather than the
+   * shape of the SQL, so any future rewrite is free as long as it stays flat.
+   */
+  const counted = async (api, path) => {
+    const original = DatabaseSync.prototype.prepare;
+    let queries = 0;
+    DatabaseSync.prototype.prepare = function prepare(sql) {
+      const statement = original.call(this, sql);
+      for (const verb of ['get', 'all', 'run']) {
+        const inner = statement[verb].bind(statement);
+        statement[verb] = (...args) => { queries += 1; return inner(...args); };
+      }
+      return statement;
+    };
+    try {
+      const response = await api.get(path);
+      return { queries, body: response.body };
+    } finally {
+      DatabaseSync.prototype.prepare = original;
+    }
+  };
+
+  it('costs the same number of queries for one batch as for many', async () => {
+    const agent = await login(ACCOUNTS.agent);
+    const leads = (await agent.api.get('/leads?limit=20')).body.leads
+      .filter((entry) => entry.phone && !entry.doNotCall);
+
+    // Separate calls produce separate batches, which is what used to multiply.
+    for (const lead of leads.slice(0, 3)) {
+      const started = await agent.api.post('/calls', { leadId: lead.id });
+      await agent.api.post(`/calls/${started.body.call.id}/consent`, { granted: true });
+      await agent.api.post(`/calls/${started.body.call.id}/answer`);
+      await agent.api.post(`/calls/${started.body.call.id}/end`, { outcome: 'connected' });
+    }
+    await drain({ timeoutMs: 45000 });
+
+    const one = await counted(agent.api, '/ai/suggestions?status=all&limit=1');
+    const many = await counted(agent.api, '/ai/suggestions?status=all&limit=100');
+
+    assert.ok(
+      many.body.batches.length >= 2,
+      `need several batches to make the comparison meaningful, got ${many.body.batches.length}`,
+    );
+    assert.equal(
+      many.queries,
+      one.queries,
+      `enriching ${many.body.batches.length} batches cost ${many.queries} queries `
+      + `where one batch cost ${one.queries} -- the per-batch lookup is back`,
+    );
+
+    // Flat is only worth having if the enrichment is still correct.
+    const fromCall = many.body.batches.filter((batch) => batch.sourceType === 'call');
+    assert.ok(fromCall.length >= 2, 'call-sourced batches should be present');
+    for (const batch of fromCall) {
+      assert.ok(batch.source, `batch ${batch.batchId} lost its source`);
+      assert.equal(batch.source.callId, batch.sourceId);
+      assert.ok(batch.source.startedAt, 'the source should carry the call time');
+    }
+    // Every batch must get its OWN call, not the first one repeated.
+    const callIds = new Set(fromCall.map((batch) => batch.source.callId));
+    assert.equal(callIds.size, fromCall.length, 'batches were enriched with the wrong call');
   });
 });
