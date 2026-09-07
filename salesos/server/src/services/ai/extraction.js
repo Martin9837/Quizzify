@@ -1,4 +1,4 @@
-import { get, all, insert, run, transaction, parseJson } from '../../db/index.js';
+import { get, all, insert, run, transaction, parseJson, inList } from '../../db/index.js';
 import { id } from '../../lib/ids.js';
 import { nowIso, toIso } from '../../lib/time.js';
 import { AI_FIELD_MAP, STAGE_MAP, LEAD_TEMPERATURES, STAGE_KEYS } from '../../lib/constants.js';
@@ -592,13 +592,15 @@ function ownerScope(ownerIds) {
   if (!ownerIds || ownerIds === 'all') return { sql: '', params: [] };
   const ids = Array.isArray(ownerIds) ? ownerIds : [ownerIds];
   if (!ids.length) return { sql: ' AND 1 = 0', params: [] };
-  const placeholders = ids.map(() => '?').join(', ');
+  // The list appears in two subqueries, so the single JSON parameter is bound
+  // twice -- still two parameters instead of two per owner.
+  const owners = inList('owner_id', ids);
   return {
     sql: ` AND (
-      (entity_type = 'lead' AND entity_id IN (SELECT id FROM leads WHERE owner_id IN (${placeholders})))
-      OR (entity_type = 'deal' AND entity_id IN (SELECT id FROM deals WHERE owner_id IN (${placeholders})))
+      (entity_type = 'lead' AND entity_id IN (SELECT id FROM leads WHERE ${owners.sql}))
+      OR (entity_type = 'deal' AND entity_id IN (SELECT id FROM deals WHERE ${owners.sql}))
     )`,
-    params: [...ids, ...ids],
+    params: [...owners.params, ...owners.params],
   };
 }
 

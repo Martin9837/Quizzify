@@ -1,4 +1,4 @@
-import { insert, all, get, run, parseJson } from '../../db/index.js';
+import { insert, all, get, run, parseJson, inList } from '../../db/index.js';
 import { id } from '../../lib/ids.js';
 import { nowIso } from '../../lib/time.js';
 import { emitToUser, emitToManagers } from '../realtime/index.js';
@@ -76,10 +76,12 @@ export function unreadCount(userId) {
 
 export function markRead(userId, notificationIds) {
   if (!notificationIds?.length) return 0;
-  const placeholders = notificationIds.map(() => '?').join(', ');
+  // The route allows 200 ids, which as `?, ?, ...` would exceed the 100
+  // bound-parameter ceiling the hosted SQLite engines impose.
+  const ids = inList('id', notificationIds);
   const result = run(
-    `UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND id IN (${placeholders})`,
-    [nowIso(), userId, ...notificationIds],
+    `UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND ${ids.sql}`,
+    [nowIso(), userId, ...ids.params],
   );
   emitToUser(userId, 'notification.read', { ids: notificationIds, unread: unreadCount(userId) });
   return result.changes;

@@ -1,4 +1,4 @@
-import { all, get, insert, run, parseJson } from '../../db/index.js';
+import { all, get, insert, run, parseJson, inList } from '../../db/index.js';
 import { id } from '../../lib/ids.js';
 import { nowIso, startOfDay, endOfDay } from '../../lib/time.js';
 import { visibilityScope } from '../../lib/permissions.js';
@@ -189,7 +189,8 @@ function leadFilterClause(scope, alias = 'l') {
   if (scope.type === 'org') return { sql: '', params: [] };
   const ids = scope.ownerIds === 'all' ? [] : scope.ownerIds;
   if (!ids.length) return { sql: ' AND 1 = 0', params: [] };
-  return { sql: ` AND ${alias}.owner_id IN (${ids.map(() => '?').join(', ')})`, params: ids };
+  const owners = inList(`${alias}.owner_id`, ids);
+  return { sql: ` AND ${owners.sql}`, params: owners.params };
 }
 
 function resolveLead({ org, scope, leadId, nameOrCompany }) {
@@ -337,7 +338,10 @@ function listLeads({ org, scope, temperature, status, source, not_contacted_days
 
 function listDeals({ org, scope, stage, min_value: minValue, closing_before: closingBefore, open_only: openOnly = true, limit = 20 }) {
   const filter = scope.type === 'org' ? { sql: '', params: [] }
-    : { sql: ` AND d.owner_id IN (${(scope.ownerIds || []).map(() => '?').join(', ') || 'NULL'})`, params: scope.ownerIds === 'all' ? [] : scope.ownerIds };
+    : (() => {
+      const owners = inList('d.owner_id', scope.ownerIds === 'all' ? [] : (scope.ownerIds || []));
+      return { sql: ` AND ${owners.sql}`, params: owners.params };
+    })();
   const params = [org, ...filter.params];
   let sql = `SELECT d.id, d.name, d.stage, d.value, d.probability, d.expected_close_date, d.lead_id,
                     l.company_name, l.first_name, l.last_name, u.name AS owner_name
@@ -375,7 +379,10 @@ function listDeals({ org, scope, stage, min_value: minValue, closing_before: clo
 
 function pipelineSummary({ org, scope }) {
   const filter = scope.type === 'org' ? { sql: '', params: [] }
-    : { sql: ` AND owner_id IN (${(scope.ownerIds || []).map(() => '?').join(', ') || 'NULL'})`, params: scope.ownerIds === 'all' ? [] : scope.ownerIds };
+    : (() => {
+      const owners = inList('owner_id', scope.ownerIds === 'all' ? [] : (scope.ownerIds || []));
+      return { sql: ` AND ${owners.sql}`, params: owners.params };
+    })();
   const byStage = all(
     `SELECT stage, COUNT(*) AS deals, COALESCE(SUM(value), 0) AS value,
             COALESCE(SUM(value * probability / 100.0), 0) AS weighted

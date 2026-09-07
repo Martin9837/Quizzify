@@ -1,4 +1,4 @@
-import { all, get, run } from '../db/index.js';
+import { all, get, run, inList } from '../db/index.js';
 import { verifyJwt, sha256 } from '../lib/crypto.js';
 import { unauthorized, forbidden } from '../lib/errors.js';
 import { can, atLeast, visibilityScope } from '../lib/permissions.js';
@@ -136,12 +136,13 @@ export function ownerScopeClause(req, column = 'owner_id', { includeUnassigned =
   const ids = visibleUserIds(req);
   if (ids === 'all') return { sql: '', params: [] };
   if (!ids.length) return { sql: ' AND 1 = 0', params: [] };
-  const placeholders = ids.map(() => '?').join(', ');
+  // One bound parameter for the whole list; see inList().
+  const { sql: inSql, params } = inList(column, ids);
   return {
     sql: includeUnassigned
-      ? ` AND (${column} IN (${placeholders}) OR ${column} IS NULL)`
-      : ` AND ${column} IN (${placeholders})`,
-    params: ids,
+      ? ` AND (${inSql} OR ${column} IS NULL)`
+      : ` AND ${inSql}`,
+    params,
   };
 }
 

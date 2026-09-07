@@ -2,7 +2,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { start, stop } from './helpers.js';
 import {
-  all, get, run, exec, transaction, insert, setDriver, activeDriver,
+  all, get, run, exec, transaction, insert, setDriver, activeDriver, inList,
 } from '../src/db/index.js';
 import { nodeDriver } from '../src/db/driver.node.js';
 
@@ -105,5 +105,65 @@ describe('the database driver seam', () => {
       .filter((file) => /from 'node:sqlite'|DatabaseSync/.test(readFileSync(new URL(file, dir), 'utf8')));
     assert.deepEqual(offenders, [],
       `these reach for node:sqlite directly instead of going through a driver: ${offenders.join(', ')}`);
+  });
+});
+
+describe('the bound-parameter ceiling', () => {
+  /**
+   * The hosted SQLite engines cap a statement at 100 bound parameters. Building
+   * `column IN (?, ?, ?)` spends one per element, so a query scoped to the
+   * people a manager can see broke at around 97 of them -- and the notification
+   * batch endpoint allows 200 ids outright. Nothing here fails on Node, where
+   * the limit is 999, which is exactly why it needs a test.
+   */
+  it('spends one parameter on a list of any length', () => {
+    for (const size of [1, 50, 200, 1000]) {
+      const values = Array.from({ length: size }, (_, i) => `id_${i}`);
+      const { sql, params } = inList('owner_id', values);
+      assert.equal(params.length, 1, `${size} values bound ${params.length} parameters`);
+      assert.ok(!sql.includes('?,'), `the clause still expands placeholders: ${sql.slice(0, 60)}`);
+    }
+  });
+
+  it('matches exactly the listed rows, and nothing for an empty list', () => {
+    const orgs = all('SELECT id FROM organizations LIMIT 1').map((row) => row.id);
+    const wanted = inList('id', orgs);
+    assert.equal(
+      all(`SELECT id FROM organizations WHERE ${wanted.sql}`, wanted.params).length,
+      orgs.length,
+    );
+
+    const none = inList('id', []);
+    assert.equal(all(`SELECT id FROM organizations WHERE ${none.sql}`, none.params).length, 0,
+      'an empty list must match nothing rather than everything');
+
+    // Duplicates must not change the result.
+    const dupes = inList('id', [...orgs, ...orgs]);
+    assert.equal(all(`SELECT id FROM organizations WHERE ${dupes.sql}`, dupes.params).length, orgs.length);
+  });
+
+  it('leaves no query building placeholders one per value', async () => {
+    const { readFileSync, readdirSync, statSync } = await import('node:fs');
+    const root = new URL('../src/', import.meta.url);
+    const offenders = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir)) {
+        const url = new URL(entry, dir);
+        if (statSync(url).isDirectory()) { walk(new URL(`${entry}/`, dir)); continue; }
+        if (!entry.endsWith('.js')) continue;
+        const text = readFileSync(url, 'utf8');
+        // The INSERT builders are the one legitimate case: a VALUES list cannot
+        // use json_each, and its length is the column count, capped well under
+        // the ceiling by the schema (36 at its widest).
+        for (const line of text.split('\n')) {
+          if (line.includes("map(() => '?')") && !line.includes('INSERT INTO')) {
+            offenders.push(`${url.pathname.split('/src/')[1]}: ${line.trim().slice(0, 80)}`);
+          }
+        }
+      }
+    };
+    walk(root);
+    assert.deepEqual(offenders, [],
+      `these expand one bound parameter per value and will breach the 100 limit:\n  ${offenders.join('\n  ')}`);
   });
 });

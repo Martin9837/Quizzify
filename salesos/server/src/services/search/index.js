@@ -1,4 +1,4 @@
-import { all, run } from '../../db/index.js';
+import { all, run, inList } from '../../db/index.js';
 import { startOfDay } from '../../lib/time.js';
 import logger from '../../lib/logger.js';
 import { LEAD_TEMPERATURES, LEAD_STATUSES, OBJECTION_CATEGORIES, STAGE_KEYS } from '../../lib/constants.js';
@@ -73,15 +73,17 @@ export function search({ organizationId, query, entityTypes, scope, since, until
     params.push(match);
   }
   if (entityTypes?.length) {
-    sql += ` AND entity_type IN (${entityTypes.map(() => '?').join(', ')})`;
-    params.push(...entityTypes);
+    const types = inList('entity_type', entityTypes);
+    sql += ` AND ${types.sql}`;
+    params.push(...types.params);
   }
   if (scope?.type === 'own') {
     sql += ' AND (owner_id = ? OR owner_id IS NULL)';
     params.push(scope.userId);
   } else if (scope?.type === 'team' && scope.userIds?.length) {
-    sql += ` AND (owner_id IN (${scope.userIds.map(() => '?').join(', ')}) OR owner_id IS NULL)`;
-    params.push(...scope.userIds);
+    const owners = inList('owner_id', scope.userIds);
+    sql += ` AND (${owners.sql} OR owner_id IS NULL)`;
+    params.push(...owners.params);
   }
   if (since) {
     sql += ' AND occurred_at >= ?';

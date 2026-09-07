@@ -1,4 +1,4 @@
-import { insert, all } from '../db/index.js';
+import { insert, all, inList } from '../db/index.js';
 import { id } from '../lib/ids.js';
 import { nowIso } from '../lib/time.js';
 import { emitToOrg } from './realtime/index.js';
@@ -60,8 +60,9 @@ export function timeline({ organizationId, leadId, dealId, types, limit = 100, o
     params.push(dealId);
   }
   if (types?.length) {
-    sql += ` AND type IN (${types.map(() => '?').join(', ')})`;
-    params.push(...types);
+    const kinds = inList('type', types);
+    sql += ` AND ${kinds.sql}`;
+    params.push(...kinds.params);
   }
   if (since) {
     sql += ' AND occurred_at >= ?';

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { all, get, parseJson } from '../db/index.js';
+import { all, get, parseJson, inList } from '../db/index.js';
 import { startOfDay, endOfDay, nowIso, addDays } from '../lib/time.js';
 import { PIPELINE_STAGES, STAGE_MAP, OPEN_STAGE_KEYS } from '../lib/constants.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -7,6 +7,21 @@ import { requirePermission, visibleUserIds, ownerScopeClause } from '../middlewa
 import { forbidden, badRequest } from '../lib/errors.js';
 import * as insights from '../services/ai/insights.js';
 import { orgSettings } from '../services/org.js';
+
+/**
+ * The owner/agent restriction for a scoped query, as one bound parameter.
+ *
+ * `'all'` means organisation-wide and adds no clause; an empty list matches
+ * nothing, which is what the hand-written ` AND 1=0` was for. Expanding the ids
+ * into `?, ?, ?` cost one bound parameter each, and the hosted SQLite engines
+ * cap a statement at 100 -- so this broke on an organisation of ~97 people.
+ */
+function scopeFilter(column, ids) {
+  if (ids === 'all') return { sql: '', params: [] };
+  const { sql, params } = inList(column, ids);
+  return { sql: ` AND ${sql}`, params };
+}
+
 
 const router = Router();
 
@@ -168,40 +183,42 @@ router.get('/team', requirePermission('analytics:team'), asyncHandler(async (req
 
   const agents = insights.agentPerformance({ organizationId: org, since, until, teamId });
   const ids = agents.map((a) => a.userId);
-  const ownerFilter = ids.length ? ` AND owner_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0';
-  const agentFilter = ids.length ? ` AND agent_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0';
+  const owner = scopeFilter('owner_id', ids);
+  const agent = scopeFilter('agent_id', ids);
+  const callAgent = scopeFilter('c.agent_id', ids);
+  const assignee = scopeFilter('assignee_id', ids);
 
   const stageTotals = all(
     `SELECT stage, COUNT(*) AS deals, COALESCE(SUM(value), 0) AS value,
             COALESCE(SUM(value * probability / 100.0), 0) AS weighted
-     FROM deals WHERE organization_id = ?${ownerFilter} AND stage NOT IN ('won','lost') GROUP BY stage`,
-    [org, ...ids],
+     FROM deals WHERE organization_id = ?${owner.sql} AND stage NOT IN ('won','lost') GROUP BY stage`,
+    [org, ...owner.params],
   );
 
   const callsByDay = all(
     `SELECT substr(started_at, 1, 10) AS day, COUNT(*) AS calls,
             SUM(CASE WHEN outcome = 'connected' THEN 1 ELSE 0 END) AS connected,
             COALESCE(SUM(talk_seconds), 0) AS talk_seconds
-     FROM calls WHERE organization_id = ?${agentFilter} AND started_at BETWEEN ? AND ?
+     FROM calls WHERE organization_id = ?${agent.sql} AND started_at BETWEEN ? AND ?
      GROUP BY day ORDER BY day ASC`,
-    [org, ...ids, since, until],
+    [org, ...agent.params, since, until],
   );
 
   const responseTimes = all(
     `SELECT owner_id, ROUND(AVG(first_response_seconds) / 60.0, 1) AS minutes, COUNT(*) AS leads
-     FROM leads WHERE organization_id = ?${ownerFilter} AND first_response_seconds IS NOT NULL
+     FROM leads WHERE organization_id = ?${owner.sql} AND first_response_seconds IS NOT NULL
      GROUP BY owner_id`,
-    [org, ...ids],
+    [org, ...owner.params],
   );
 
   const callQuality = all(
     `SELECT c.agent_id, ROUND(AVG(json_extract(a.scorecard, '$.overall')), 1) AS avg_score,
             ROUND(AVG(a.talk_ratio), 2) AS avg_talk_ratio, COUNT(*) AS analysed
      FROM call_analyses a JOIN calls c ON c.id = a.call_id
-     WHERE a.organization_id = ?${ids.length ? ` AND c.agent_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     WHERE a.organization_id = ?${callAgent.sql}
        AND a.created_at BETWEEN ? AND ?
      GROUP BY c.agent_id`,
-    [org, ...ids, since, until],
+    [org, ...callAgent.params, since, until],
   );
 
   const followUpCompletion = all(
@@ -209,9 +226,9 @@ router.get('/team', requirePermission('analytics:team'), asyncHandler(async (req
             SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
             SUM(CASE WHEN status = 'open' AND due_at < ? THEN 1 ELSE 0 END) AS overdue,
             COUNT(*) AS total
-     FROM tasks WHERE organization_id = ?${ids.length ? ` AND assignee_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     FROM tasks WHERE organization_id = ?${assignee.sql}
        AND created_at >= ? GROUP BY assignee_id`,
-    [nowIso(), org, ...ids, since],
+    [nowIso(), org, ...assignee.params, since],
   );
 
   res.json({
@@ -256,15 +273,15 @@ router.get('/team', requirePermission('analytics:team'), asyncHandler(async (req
 router.get('/funnel', requirePermission('analytics:read'), asyncHandler(async (req, res) => {
   const ids = scopeIds(req);
   const { since } = periodOf(req, 90);
-  const ownerFilter = ids === 'all' ? '' : ids.length ? ` AND d.owner_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0';
-  const params = ids === 'all' ? [req.auth.organizationId, since] : [req.auth.organizationId, since, ...ids];
+  const dealOwner = scopeFilter('d.owner_id', ids);
+  const params = [req.auth.organizationId, since, ...dealOwner.params];
 
   // Count how many deals ever reached each stage, not how many sit there now:
   // that is the only honest way to measure stage-to-stage conversion.
   const reached = all(
     `SELECT h.to_stage AS stage, COUNT(DISTINCT h.deal_id) AS deals
      FROM deal_stage_history h JOIN deals d ON d.id = h.deal_id
-     WHERE h.organization_id = ? AND h.created_at >= ?${ownerFilter}
+     WHERE h.organization_id = ? AND h.created_at >= ?${dealOwner.sql}
      GROUP BY h.to_stage`,
     params,
   );
@@ -287,71 +304,92 @@ router.get('/funnel', requirePermission('analytics:read'), asyncHandler(async (r
 
 // GET /analytics/reports/:report
 const REPORTS = {
-  sales_performance: (org, ids, since, until) => all(
+  sales_performance: (org, ids, since, until) => {
+    const scope = scopeFilter('u.id', ids);
+    return all(
     `SELECT u.name AS agent, COUNT(DISTINCT d.id) AS deals_won, COALESCE(SUM(d.value), 0) AS revenue,
             u.quota_amount AS quota
      FROM users u LEFT JOIN deals d ON d.owner_id = u.id AND d.stage = 'won' AND d.closed_at BETWEEN ? AND ?
-     WHERE u.organization_id = ?${ids === 'all' ? '' : ids.length ? ` AND u.id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     WHERE u.organization_id = ?${scope.sql}
      GROUP BY u.id ORDER BY revenue DESC`,
-    ids === 'all' ? [since, until, org] : [since, until, org, ...ids],
-  ),
-  calls: (org, ids, since, until) => all(
+    [since, until, org, ...scope.params],
+    );
+  },
+  calls: (org, ids, since, until) => {
+    const scope = scopeFilter('c.agent_id', ids);
+    return all(
     `SELECT substr(c.started_at, 1, 10) AS day, u.name AS agent, COUNT(*) AS calls,
             SUM(CASE WHEN c.outcome = 'connected' THEN 1 ELSE 0 END) AS connected,
             ROUND(COALESCE(SUM(c.talk_seconds), 0) / 60.0, 1) AS talk_minutes
      FROM calls c LEFT JOIN users u ON u.id = c.agent_id
-     WHERE c.organization_id = ? AND c.started_at BETWEEN ? AND ?${ids === 'all' ? '' : ids.length ? ` AND c.agent_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     WHERE c.organization_id = ? AND c.started_at BETWEEN ? AND ?${scope.sql}
      GROUP BY day, c.agent_id ORDER BY day DESC`,
-    ids === 'all' ? [org, since, until] : [org, since, until, ...ids],
-  ),
-  lead_sources: (org, ids) => all(
+    [org, since, until, ...scope.params],
+    );
+  },
+  lead_sources: (org, ids) => {
+    const scope = scopeFilter('l.owner_id', ids);
+    return all(
     `SELECT l.source, COUNT(*) AS leads,
             SUM(CASE WHEN l.status = 'customer' THEN 1 ELSE 0 END) AS converted,
             COALESCE(SUM(l.deal_value), 0) AS pipeline_value,
             ROUND(AVG(l.score), 1) AS avg_score
-     FROM leads l WHERE l.organization_id = ? AND l.archived_at IS NULL${ids === 'all' ? '' : ids.length ? ` AND l.owner_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     FROM leads l WHERE l.organization_id = ? AND l.archived_at IS NULL${scope.sql}
      GROUP BY l.source ORDER BY leads DESC`,
-    ids === 'all' ? [org] : [org, ...ids],
-  ),
-  deal_velocity: (org, ids) => all(
+    [org, ...scope.params],
+    );
+  },
+  deal_velocity: (org, ids) => {
+    const scope = scopeFilter('d.owner_id', ids);
+    return all(
     `SELECT h.to_stage AS stage,
             ROUND(AVG(julianday(COALESCE(next_h.created_at, datetime('now'))) - julianday(h.created_at)), 1) AS avg_days,
             COUNT(*) AS transitions
      FROM deal_stage_history h
      JOIN deals d ON d.id = h.deal_id
      LEFT JOIN deal_stage_history next_h ON next_h.deal_id = h.deal_id AND next_h.created_at > h.created_at
-     WHERE h.organization_id = ?${ids === 'all' ? '' : ids.length ? ` AND d.owner_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     WHERE h.organization_id = ?${scope.sql}
      GROUP BY h.to_stage`,
-    ids === 'all' ? [org] : [org, ...ids],
-  ),
-  follow_up_performance: (org, ids, since) => all(
+    [org, ...scope.params],
+    );
+  },
+  follow_up_performance: (org, ids, since) => {
+    const scope = scopeFilter('t.assignee_id', ids);
+    return all(
     `SELECT u.name AS agent, COUNT(t.id) AS tasks,
             SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS completed,
             SUM(CASE WHEN t.status = 'open' AND t.due_at < datetime('now') THEN 1 ELSE 0 END) AS overdue,
             SUM(CASE WHEN t.source = 'ai' THEN 1 ELSE 0 END) AS ai_created
      FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
-     WHERE t.organization_id = ? AND t.created_at >= ?${ids === 'all' ? '' : ids.length ? ` AND t.assignee_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     WHERE t.organization_id = ? AND t.created_at >= ?${scope.sql}
      GROUP BY t.assignee_id ORDER BY completed DESC`,
-    ids === 'all' ? [org, since] : [org, since, ...ids],
-  ),
-  ai_call_insights: (org, ids, since) => all(
+    [org, since, ...scope.params],
+    );
+  },
+  ai_call_insights: (org, ids, since) => {
+    const scope = scopeFilter('c.agent_id', ids);
+    return all(
     `SELECT a.sentiment, COUNT(*) AS calls,
             ROUND(AVG(json_extract(a.scorecard, '$.overall')), 1) AS avg_score,
             ROUND(AVG(a.talk_ratio), 2) AS avg_talk_ratio,
             ROUND(AVG(json_array_length(a.objections)), 2) AS avg_objections,
             ROUND(AVG(json_array_length(a.buying_signals)), 2) AS avg_buying_signals
      FROM call_analyses a JOIN calls c ON c.id = a.call_id
-     WHERE a.organization_id = ? AND a.created_at >= ?${ids === 'all' ? '' : ids.length ? ` AND c.agent_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+     WHERE a.organization_id = ? AND a.created_at >= ?${scope.sql}
      GROUP BY a.sentiment`,
-    ids === 'all' ? [org, since] : [org, since, ...ids],
-  ),
-  revenue: (org, ids, since, until) => all(
+    [org, since, ...scope.params],
+    );
+  },
+  revenue: (org, ids, since, until) => {
+    const scope = scopeFilter('d.owner_id', ids);
+    return all(
     `SELECT substr(d.closed_at, 1, 7) AS month, COUNT(*) AS deals, COALESCE(SUM(d.value), 0) AS revenue
      FROM deals d WHERE d.organization_id = ? AND d.stage = 'won' AND d.closed_at BETWEEN ? AND ?
-       ${ids === 'all' ? '' : ids.length ? ` AND d.owner_id IN (${ids.map(() => '?').join(', ')})` : ' AND 1=0'}
+       ${scope.sql}
      GROUP BY month ORDER BY month ASC`,
-    ids === 'all' ? [org, since, until] : [org, since, until, ...ids],
-  ),
+    [org, since, until, ...scope.params],
+    );
+  },
   win_loss: (org, ids, since) => {
     const analysis = insights.lossAnalysis({ organizationId: org, ownerIds: ids, since });
     return analysis.reasons.map((r) => ({

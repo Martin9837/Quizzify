@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { all, get, parseJson } from '../db/index.js';
+import { all, get, parseJson, inList } from '../db/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { visibleUserIds } from '../middleware/auth.js';
 import * as searchService from '../services/search/index.js';
@@ -22,8 +22,8 @@ function enrich(organizationId, results) {
   const leads = leadIds.length
     ? all(
       `SELECT id, first_name, last_name, company_name FROM leads
-       WHERE organization_id = ? AND id IN (${leadIds.map(() => '?').join(', ')})`,
-      [organizationId, ...leadIds],
+       WHERE organization_id = ? AND ${inList('id', leadIds).sql}`,
+      [organizationId, ...inList('id', leadIds).params],
     )
     : [];
   const leadMap = new Map(leads.map((l) => [l.id, l]));
@@ -94,8 +94,9 @@ router.post('/natural', asyncHandler(async (req, res) => {
   if (filters.temperature || filters.status) {
     const leadIds = [...new Set(results.map((r) => r.leadId).filter(Boolean))];
     if (leadIds.length) {
-      const params = [req.auth.organizationId, ...leadIds];
-      let sql = `SELECT id FROM leads WHERE organization_id = ? AND id IN (${leadIds.map(() => '?').join(', ')})`;
+      const scoped = inList('id', leadIds);
+      const params = [req.auth.organizationId, ...scoped.params];
+      let sql = `SELECT id FROM leads WHERE organization_id = ? AND ${scoped.sql}`;
       if (filters.temperature) {
         sql += ' AND temperature = ?';
         params.push(filters.temperature);

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { all, get, parseJson } from '../db/index.js';
+import { all, get, parseJson, inList } from '../db/index.js';
 import { parsePagination } from '../lib/validate.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ownerScopeClause } from '../middleware/auth.js';
@@ -19,8 +19,9 @@ router.get('/', asyncHandler(async (req, res) => {
   if (req.query.types) {
     const types = String(req.query.types).split(',').filter((t) => ACTIVITY_TYPES.includes(t));
     if (types.length) {
-      filters.push(`a.type IN (${types.map(() => '?').join(', ')})`);
-      params.push(...types);
+      const kinds = inList('a.type', types);
+      filters.push(kinds.sql);
+      params.push(...kinds.params);
     }
   }
   if (req.query.leadId) {

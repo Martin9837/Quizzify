@@ -1,4 +1,4 @@
-import { all, get, parseJson } from '../../db/index.js';
+import { all, get, parseJson, inList } from '../../db/index.js';
 import { startOfDay, endOfDay, nowIso } from '../../lib/time.js';
 import { OPEN_STAGE_KEYS, STAGE_MAP } from '../../lib/constants.js';
 
@@ -21,7 +21,8 @@ const ownerClause = (ownerIds, column = 'owner_id') => {
   if (!ownerIds || ownerIds === 'all') return { sql: '', params: [] };
   const list = Array.isArray(ownerIds) ? ownerIds : [ownerIds];
   if (!list.length) return { sql: ' AND 1 = 0', params: [] };
-  return { sql: ` AND ${column} IN (${list.map(() => '?').join(', ')})`, params: list };
+  const { sql, params } = inList(column, list);
+  return { sql: ` AND ${sql}`, params };
 };
 
 // ------------------------------------------------------ conversion scoring ---
@@ -543,8 +544,8 @@ export function callListForToday({ organizationId, userId, limit = 12 }) {
     ids.length
       ? all(
         `SELECT id FROM leads WHERE organization_id = ? AND do_not_call = 1
-           AND id IN (${ids.map(() => '?').join(', ')})`,
-        [organizationId, ...ids],
+           AND ${inList('id', ids).sql}`,
+        [organizationId, ...inList('id', ids).params],
       ).map((row) => row.id)
       : [],
   );

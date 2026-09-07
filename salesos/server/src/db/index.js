@@ -48,9 +48,13 @@ export function getDb() {
  * bundles `schema.sql` as a string and hands it over instead.
  */
 export function migrate(schemaSql) {
-  // Resolved here rather than at module scope: `import.meta.url` is undefined
-  // on Workers, and computing it eagerly threw before any code could run.
+  // A driver that was handed its schema supplies it, so a caller does not have
+  // to know which engine is installed -- `seed()` calls this with no argument.
+  // The filesystem is the last resort, and the path is resolved here rather
+  // than at module scope: `import.meta.url` is undefined on Workers, and
+  // computing it eagerly threw before any code could run.
   const schema = schemaSql
+    ?? driver.schema
     ?? fs.readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), 'schema.sql'),
       'utf8',
@@ -167,6 +171,28 @@ export function upsert(table, data, conflictKeys) {
   run(sql, keys.map((k) => data[k]));
 }
 
+/**
+ * `column IN (...)` for a list of any length, as a single bound parameter.
+ *
+ * Expanding a list into `?, ?, ?` costs one bound parameter per element, and
+ * the hosted SQLite engines cap a statement at 100 of them -- so a scoped query
+ * broke once an organisation had ~97 users, and a client could breach it
+ * outright by sending 200 notification ids. `json_each` takes the list as one
+ * JSON parameter instead, however long it is.
+ *
+ * Checked against EXPLAIN QUERY PLAN: the index is still used
+ * (`SEARCH leads USING INDEX idx_leads_owner (organization_id=? AND
+ * owner_id=?)`), so this is not a trade of a ceiling for a table scan.
+ *
+ * An empty list yields a clause that matches nothing, which is what every
+ * caller wanted and had to write by hand.
+ */
+export function inList(column, values) {
+  const list = [...new Set(values ?? [])];
+  if (!list.length) return { sql: `${column} IN (SELECT value FROM json_each('[]'))`, params: [] };
+  return { sql: `${column} IN (SELECT value FROM json_each(?))`, params: [list] };
+}
+
 // ------------------------------------------------------- JSON convenience ---
 export function parseJson(value, fallback) {
   if (value === null || value === undefined || value === '') return fallback;
@@ -192,5 +218,5 @@ export function hydrate(row, jsonFields = [], defaults = {}) {
 
 export default {
   getDb, migrate, closeDb, setDriver, activeDriver,
-  all, get, run, exec, transaction, insert, update, upsert, parseJson, hydrate,
+  all, get, run, exec, transaction, insert, update, upsert, inList, parseJson, hydrate,
 };

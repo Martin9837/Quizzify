@@ -10,8 +10,27 @@ import { tooManyRequests } from '../lib/errors.js';
  */
 const buckets = new Map();
 
+const SWEEP_INTERVAL_MS = 60000;
+let lastSweep = 0;
+
+/**
+ * Drop expired buckets as requests arrive, rather than on a timer.
+ *
+ * This used to be a module-scope `setInterval`. A sweep is only ever needed
+ * while the map is being used, so doing it here costs nothing extra -- and a
+ * timer cannot be created at module scope on every host: Workers rejects it
+ * outright with "Disallowed operation called within global scope", before any
+ * request is served.
+ */
+function sweepExpired(now) {
+  if (now - lastSweep < SWEEP_INTERVAL_MS) return;
+  lastSweep = now;
+  for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key);
+}
+
 function hit(key, max, windowMs) {
   const now = Date.now();
+  sweepExpired(now);
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= now) {
     buckets.set(key, { count: 1, resetAt: now + windowMs });
@@ -35,12 +54,5 @@ export function rateLimit({ max = config.rateLimit.max, windowMs = config.rateLi
     return next();
   };
 }
-
-// Periodically drop expired buckets so memory does not grow unbounded.
-const sweeper = setInterval(() => {
-  const now = Date.now();
-  for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key);
-}, 60000);
-sweeper.unref?.();
 
 export default rateLimit;
