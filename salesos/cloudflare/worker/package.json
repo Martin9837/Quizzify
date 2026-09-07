@@ -1,0 +1,13 @@
+{
+  "name": "salesos-cloudflare-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev -c wrangler.dev.toml --local --port 8787",
+    "smoke": "node smoke.mjs",
+    "parity": "node parity.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": { "express": "^4.22.2" },
+  "devDependencies": { "wrangler": "^4.129.1" }
+}

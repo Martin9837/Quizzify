@@ -1,0 +1,38 @@
+name = "salesos-api"
+main = "src/index.js"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+# express.json/urlencoded are lazy getters that esbuild's CJS interop fires at
+# import time, so body-parser loads even though the bridge parses the body and
+# sets req._body so it no-ops. body-parser reaches iconv-lite, whose stream
+# support does not load on workerd.
+[alias]
+"iconv-lite" = "../spike/src/iconv-stub.js"
+
+# schema.sql is bundled as text: node:fs on Workers is memory-backed, so there
+# is no file to read it from.
+[[rules]]
+type = "Text"
+globs = ["**/*.sql"]
+
+[[durable_objects.bindings]]
+name = "API"
+class_name = "SalesOsApi"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SalesOsApi"]
+
+# Replaces the four 60-second setInterval loops.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+NODE_ENV = "production"
+TELEPHONY_PROVIDER = "simulator"
+EMAIL_PROVIDER = "log"
+AI_PROVIDER = "local"
+STORAGE_DRIVER = "r2"
+QUEUE_ENABLED = "false"      # the alarm drives the queue, not setInterval
+SCHEDULER_ENABLED = "false"  # cron drives the scheduler

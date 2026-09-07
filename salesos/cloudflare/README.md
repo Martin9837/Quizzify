@@ -1,8 +1,16 @@
 # Putting the SalesOS API on Cloudflare
 
 The short version: **a Durable Object is the only place on Cloudflare this
-server can run without rewriting its data layer**, and it works. Everything in
-this directory is a runnable proof of that, not a design document.
+server can run without rewriting its data layer**, and it works.
+
+- `worker/` is the deployable thing: the real Express app, in one Durable
+  Object, passing 32 checks over the real API and answering identically to a
+  Node instance on all 19 requests in `worker/parity.mjs`.
+- `spike/` is the evidence underneath it — three focused probes that establish
+  the storage engine, the HTTP layer and the real data layer separately, so a
+  failure in the assembled thing can be localised.
+
+Neither is a design document; both run.
 
 ## Why this is not a Workers app, and is a Durable Object app
 
@@ -159,14 +167,17 @@ Still to do:
   site changed, and all 150 server tests pass on the node driver. A test asserts
   nothing under `db/` reaches for `node:sqlite` behind the driver's back, since
   that would work on Node and fail only once deployed.
-- **The scheduler.** Four `setInterval` loops become Cron Triggers (one-minute
-  granularity, which is exactly what they use) or DO Alarms. Note `setInterval`
-  inside a Durable Object blocks hibernation.
-- **The job queue.** It can stay as-is, driven by an alarm instead of a timer,
-  because the object is long-lived and single-threaded — the atomic-claim
-  `UPDATE` is still correct. Cloudflare Queues is the alternative and is
-  at-least-once, so it would need an idempotency key the current queue does not
-  have.
+- **The scheduler.** A cron trigger is configured at one-minute granularity,
+  which is exactly what the loops use, and it reaches the object — but it
+  currently only drains the job queue. The four `setInterval` loops in
+  `server/src/index.js`, including the two cross-organisation automation
+  sweeps, still need connecting to it. Note `setInterval` inside a Durable
+  Object blocks hibernation, so they cannot simply be started.
+- ~~**The job queue.**~~ **Done.** It stays as it is, driven by a Durable Object
+  alarm rather than a timer: the object is long-lived and single-threaded, so
+  the atomic-claim `UPDATE` is still correct, and `run().changes` is verified
+  exact on this engine. Cloudflare Queues remains the alternative, but it is
+  at-least-once and would need an idempotency key this queue does not have.
 - **Recordings.** Already done: `STORAGE_DRIVER=r2` uses the SigV4 driver in
   `server/src/services/storage/provider.s3.js`.
 - **SSE.** It works and has no documented duration limit, but an open stream is

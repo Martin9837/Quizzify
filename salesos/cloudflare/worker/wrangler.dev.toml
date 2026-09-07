@@ -1,0 +1,31 @@
+# Local trial only: not production, and the demo seed switched on. The demo
+# accounts share a published password, which is why both conditions exist.
+name = "salesos-api-dev"
+main = "src/index.js"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+[alias]
+"iconv-lite" = "../spike/src/iconv-stub.js"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.sql"]
+
+[[durable_objects.bindings]]
+name = "API"
+class_name = "SalesOsApi"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SalesOsApi"]
+
+[vars]
+NODE_ENV = "development"
+TELEPHONY_PROVIDER = "simulator"
+EMAIL_PROVIDER = "log"
+AI_PROVIDER = "local"
+STORAGE_DRIVER = "local"
+QUEUE_ENABLED = "false"
+SCHEDULER_ENABLED = "false"
+SALESOS_ALLOW_DEMO_SEED = "true"

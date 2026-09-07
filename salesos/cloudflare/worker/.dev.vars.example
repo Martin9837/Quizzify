@@ -1,0 +1,7 @@
+# Copy to .dev.vars for local development. In a deployment these are
+# `wrangler secret put`, never committed: the server refuses to boot in
+# production without them, and changing either one is destructive --
+# JWT_SECRET invalidates every session, ENCRYPTION_KEY orphans every recording.
+JWT_SECRET=local-development-jwt-secret-do-not-deploy-this
+ENCRYPTION_KEY=local-development-encryption-key-do-not-deploy
+LOG_LEVEL=error
