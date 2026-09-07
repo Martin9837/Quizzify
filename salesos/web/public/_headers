@@ -1,0 +1,10 @@
+# The service worker decides when every other asset refreshes, so it must not
+# itself be served from a stale cache -- otherwise a deploy can take an hour to
+# reach a client that already installed the app. Mirrors what the Node server
+# sends for the same file.
+/sw.js
+  Cache-Control: no-cache
+
+# Content-hashed build output never changes under the same name.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

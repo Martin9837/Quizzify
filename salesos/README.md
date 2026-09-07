@@ -192,6 +192,7 @@ Design decisions worth knowing:
 
 Deeper detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ·
 The iPhone app: [`docs/IOS.md`](docs/IOS.md) ·
+Deployment: [`docs/DEPLOY.md`](docs/DEPLOY.md) ·
 API reference: [`docs/API.md`](docs/API.md) ·
 Security and compliance posture: [`docs/SECURITY.md`](docs/SECURITY.md)
 

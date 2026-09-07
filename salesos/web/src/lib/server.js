@@ -27,14 +27,33 @@ export function isNativeShell() {
   }
 }
 
-/** '' in the browser (relative URLs); an absolute origin in the native shell. */
+/**
+ * Where the API is, for a browser build.
+ *
+ * Served by the API itself -- `npm start`, or the dev proxy -- the two share an
+ * origin and relative URLs are right, which is the default. Deployed as static
+ * files to a CDN (Cloudflare Pages, S3, Netlify) the client and the API are on
+ * different origins, so the base has to be baked in at build time:
+ *
+ *   VITE_API_BASE=https://api.example.com npm run build
+ *
+ * Whatever is set must be reachable from a browser and must list this origin in
+ * the server's WEB_ORIGINS, or every request will be refused by CORS.
+ */
+const BUILD_TIME_BASE = (import.meta.env?.VITE_API_BASE || '').replace(/\/+$/, '');
+
+/** '' when the API shares this origin; an absolute origin otherwise. */
 export function getServerOrigin() {
-  if (!isNativeShell()) return '';
-  try {
-    return localStorage.getItem(KEY) || '';
-  } catch {
-    return '';
+  // The native shell asks the user, because a bundle on a phone cannot know
+  // which server it belongs to. That choice outranks a build-time default.
+  if (isNativeShell()) {
+    try {
+      return localStorage.getItem(KEY) || '';
+    } catch {
+      return '';
+    }
   }
+  return BUILD_TIME_BASE;
 }
 
 /**

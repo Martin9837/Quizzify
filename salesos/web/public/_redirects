@@ -1,0 +1,6 @@
+# Cloudflare Pages (and Netlify) SPA fallback.
+#
+# React Router owns the path once the shell boots, so a deep link like
+# /admin/users has no file behind it and would 404. Static assets are matched
+# first, so this only catches paths that are really routes.
+/*  /index.html  200
