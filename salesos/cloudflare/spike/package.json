@@ -4,8 +4,13 @@
   "type": "module",
   "scripts": {
     "sqlite": "wrangler dev -c wrangler.sqlite.toml --local",
-    "express": "wrangler dev -c wrangler.express.toml --local"
+    "express": "wrangler dev -c wrangler.express.toml --local",
+    "realdb": "wrangler dev -c wrangler.realdb.toml --local"
   },
-  "dependencies": { "express": "^4.22.2" },
-  "devDependencies": { "wrangler": "^4.129.1" }
+  "dependencies": {
+    "express": "^4.22.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.129.1"
+  }
 }

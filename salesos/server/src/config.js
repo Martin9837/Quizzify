@@ -3,8 +3,12 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const serverRoot = path.resolve(__dirname, '..');
+// `import.meta.url` is undefined on Workers, where computing this eagerly threw
+// before any code could run. Nothing that matters on a host without a
+// filesystem depends on the path -- the .env loader and the default storage
+// root -- so it degrades to a placeholder instead of taking the process down.
+const moduleDir = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : '';
+const serverRoot = moduleDir ? path.resolve(moduleDir, '..') : '/';
 
 // Minimal .env loader (avoids a dependency; ignores comments and blank lines).
 function loadDotEnv() {
@@ -34,12 +38,36 @@ const int = (v, d) => (v === undefined || v === '' ? d : Number.parseInt(v, 10))
 // In development we generate ephemeral secrets so the app boots with zero setup.
 // In production a missing secret is fatal: silent weak keys are worse than a crash.
 const nodeEnv = env.NODE_ENV || 'development';
+// A production process must refuse to start without these rather than fall back
+// to an ephemeral key, so the presence check stays eager. It generates nothing,
+// which is what lets it run at import time on every host.
+const REQUIRED_SECRETS = ['JWT_SECRET', 'ENCRYPTION_KEY'];
+if (nodeEnv === 'production') {
+  for (const name of REQUIRED_SECRETS) {
+    if (!env[name]) throw new Error(`${name} must be set in production`);
+  }
+}
+
+const generatedSecrets = new Map();
+
+/**
+ * The configured secret, or a throwaway one outside production.
+ *
+ * The throwaway is generated on first read rather than at import: Workers
+ * forbids generating random values in global scope ("Disallowed operation
+ * called within global scope"), and this ran during module evaluation even when
+ * the value was never used. Memoised, so a key stays stable for the life of the
+ * process -- a changing one would invalidate every session it had just signed.
+ */
 function secret(name, fallbackBytes = 32) {
   if (env[name]) return env[name];
   if (nodeEnv === 'production') {
     throw new Error(`${name} must be set in production`);
   }
-  return randomBytes(fallbackBytes).toString('hex');
+  if (!generatedSecrets.has(name)) {
+    generatedSecrets.set(name, randomBytes(fallbackBytes).toString('hex'));
+  }
+  return generatedSecrets.get(name);
 }
 
 export const config = {
@@ -55,7 +83,7 @@ export const config = {
   },
 
   auth: {
-    jwtSecret: secret('JWT_SECRET'),
+    get jwtSecret() { return secret('JWT_SECRET'); },
     accessTtlSeconds: int(env.ACCESS_TOKEN_TTL, 60 * 60 * 12),
     refreshTtlSeconds: int(env.REFRESH_TOKEN_TTL, 60 * 60 * 24 * 30),
     // scrypt parameters -- cost tuned for interactive logins
@@ -64,7 +92,7 @@ export const config = {
 
   // Used to encrypt integration credentials and (optionally) recordings at rest.
   encryption: {
-    key: secret('ENCRYPTION_KEY'),
+    get key() { return secret('ENCRYPTION_KEY'); },
   },
 
   storage: {

@@ -1,0 +1,29 @@
+# The real server/src/db layer and the real schema.sql, on a Durable Object.
+#   npx wrangler dev -c wrangler.realdb.toml --local
+name = "salesos-realdb-probe"
+main = "src/real-db.js"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+# The server refuses to boot in production without these; in a real deployment
+# they are `wrangler secret put`, not vars.
+[vars]
+NODE_ENV = "test"
+JWT_SECRET = "spike-jwt-secret-not-for-any-real-deployment"
+ENCRYPTION_KEY = "spike-encryption-key-not-for-any-real-deployment"
+LOG_LEVEL = "error"
+
+[alias]
+"iconv-lite" = "./src/iconv-stub.js"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.sql"]
+
+[[durable_objects.bindings]]
+name = "REALDB"
+class_name = "RealDb"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RealDb"]

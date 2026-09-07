@@ -47,12 +47,46 @@ Against real workerd (wrangler 4.129.1, `--local`), not from documentation:
   the error-handling middleware catches a throwing route
 ```
 
+And then the one that matters, which imports `server/src/db/index.js` and the
+real `schema.sql` rather than re-implementing either:
+
+```
+19/19  src/real-db.js
+  the real 634-line schema applies                     (37 tables, FTS5 shadow tables included)
+  the FTS5 virtual table is among them
+  insert() then get() round-trips
+  a plain object comes back, not a null-prototype row
+  a Date parameter is coerced to an ISO string
+  a boolean parameter is coerced to 1
+  a successful guarded UPDATE reports changes = 1
+  a losing guarded UPDATE reports changes = 0           <- no double claim
+  changes counts every row a multi-row UPDATE touched
+  changes is 0 when nothing matched
+  transaction() propagates the error
+  a failed transaction() rolled the write back
+  a committing transaction() keeps its writes
+  a dangling foreign key becomes a 400, not a 500
+  the real FTS5 query shape works                       (snippet + bm25 + MATCH)
+  json_each filters work, with the array coerced by normalise()
+  hydrate() parses the JSON column back out
+  ON DELETE CASCADE removed the dependent rows
+  the probe can re-run against persisted storage
+```
+
+The four `changes` checks are the load-bearing ones. `cursor.rowsWritten`
+counts index rows as well, so it is *not* `changes()` — and the job queue's
+atomic claim (`UPDATE ... WHERE status = 'pending'`) turns on that number being
+exact, since a wrong one would let two workers run the same job. The driver
+reads `SELECT changes()` after the write instead, which is safe because a
+Durable Object is single-threaded.
+
 Run them yourself:
 
 ```bash
 cd salesos/cloudflare/spike && npm install
 npm run sqlite    # then: curl localhost:8787/
 npm run express   # then: curl localhost:8787/__probe
+npm run realdb    # then: curl localhost:8787/
 ```
 
 The schema clears every Durable Object SQLite limit with room to spare:
@@ -63,6 +97,31 @@ The schema clears every Durable Object SQLite limit with room to spare:
 | Bound parameters per query | 100 | 36 (widest `insert`) |
 | Row / string / BLOB size | 2 MB | 5.7 KB (0.27%) |
 | Database size | 10 GB | 1.9 MB seeded |
+
+## Four things that only showed up by running it
+
+None of these are visible from the documentation, and each one stopped the
+worker from starting at all — before any route ran:
+
+1. **`import.meta.url` is undefined on Workers.** `db/index.js`, `config.js`
+   and `app.js` each computed `__dirname` from it at module scope, so module
+   evaluation threw. All three now resolve it lazily, at the point the path is
+   actually needed — which is only ever to read a file from a disk.
+2. **Generating random values in global scope is forbidden.** `config.js` minted
+   a throwaway JWT/encryption key at import when the environment did not supply
+   one: "Disallowed operation called within global scope". It is generated on
+   first read and memoised now. The eager *presence* check that makes a
+   production process refuse to start without real keys is unchanged and still
+   tested; only the random fallback moved.
+3. **`node:fs` is a memory-backed virtual FS**, so `schema.sql` cannot be read
+   from disk. `migrate()` takes the SQL as an argument now, and the Durable
+   Object bundles the file as text and hands it over.
+4. **`PRAGMA journal_mode = WAL` is rejected** with `SQLITE_AUTH`. The driver
+   skips `journal_mode`, `busy_timeout` and `foreign_keys`: a Durable Object is
+   single-threaded and always enforces foreign keys, which is a stronger
+   guarantee than what those settings were arranging. The driver also names the
+   offending statement on failure, because "not authorized" against a
+   77-statement script otherwise says nothing at all.
 
 ## The two things that bite
 
@@ -94,10 +153,12 @@ workerd against ~42 ms on Node here), and the RBAC layer.
 
 Still to do:
 
-- **The db driver.** `getDb()` returns a `DatabaseSync`; it needs a sibling that
-  wraps `ctx.storage.sql`. `all`/`get`/`run` map onto `exec(...)` directly.
-  `PRAGMA journal_mode = WAL` and `busy_timeout` go away — a Durable Object is
-  single-threaded, which is what those settings were approximating.
+- ~~**The db driver.**~~ **Done.** `server/src/db/index.js` keeps all 13 of its
+  exports and delegates five primitives to a driver: `driver.node.js` is the
+  existing `node:sqlite` engine, `driver.do.js` the Durable Object one. No call
+  site changed, and all 150 server tests pass on the node driver. A test asserts
+  nothing under `db/` reaches for `node:sqlite` behind the driver's back, since
+  that would work on Node and fail only once deployed.
 - **The scheduler.** Four `setInterval` loops become Cron Triggers (one-minute
   granularity, which is exactly what they use) or DO Alarms. Note `setInterval`
   inside a Durable Object blocks hibernation.

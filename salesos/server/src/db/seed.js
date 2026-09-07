@@ -797,8 +797,7 @@ function seedWebhook(orgId, users) {
 // --------------------------------------------------------------------------- //
 export async function seed({ reset = false } = {}) {
   if (reset) resetDatabase();
-  const db = getDb();
-  migrate(db);
+  migrate();
 
   const existing = get('SELECT COUNT(*) AS n FROM organizations')?.n || 0;
   if (existing && !reset) {

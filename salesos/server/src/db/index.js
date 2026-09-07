@@ -1,38 +1,68 @@
-import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import config from '../config.js';
 import logger from '../lib/logger.js';
 import { badRequest } from '../lib/errors.js';
+import { nodeDriver } from './driver.node.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-let database = null;
+/**
+ * Every read and write in the codebase goes through the five primitives below,
+ * so the storage engine is one assignment rather than 478 edits.
+ *
+ * The default is a local SQLite file. The other implementation is a Durable
+ * Object's embedded SQLite (`driver.do.js`), which is the only storage on
+ * Cloudflare that is still synchronous -- which is what lets this seam be this
+ * thin. A driver supplies `all`/`get`/`run`/`exec`/`transaction` plus
+ * `open`/`close`; the JSON handling, the parameter coercion and the constraint
+ * translation below are engine-independent and stay here.
+ */
+let driver = nodeDriver;
+let migrated = false;
 
-export function getDb() {
-  if (database) return database;
-  const file = config.db.file;
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  database = new DatabaseSync(file);
-  database.exec('PRAGMA foreign_keys = ON');
-  if (file !== ':memory:') database.exec('PRAGMA journal_mode = WAL');
-  database.exec('PRAGMA busy_timeout = 5000');
-  migrate(database);
-  return database;
+/** Swap the engine. Call it before the first read -- a Durable Object does this
+ *  from its constructor. */
+export function setDriver(next) {
+  driver = next;
+  migrated = false;
+  logger.debug('database driver installed', { driver: next.name });
+  return driver;
 }
 
-export function migrate(db = getDb()) {
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  db.exec(schema);
-  return db;
+export function activeDriver() {
+  return driver;
+}
+
+export function getDb() {
+  const handle = driver.open();
+  // The schema is applied on first use, as it always was.
+  if (!migrated) migrate(driver.schema);
+  return handle;
+}
+
+/**
+ * Apply the schema.
+ *
+ * The SQL can be passed in, because not every host has a filesystem to read it
+ * from: on Workers `node:fs` is a memory-backed virtual FS, so a Durable Object
+ * bundles `schema.sql` as a string and hands it over instead.
+ */
+export function migrate(schemaSql) {
+  // Resolved here rather than at module scope: `import.meta.url` is undefined
+  // on Workers, and computing it eagerly threw before any code could run.
+  const schema = schemaSql
+    ?? fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), 'schema.sql'),
+      'utf8',
+    );
+  driver.exec(schema);
+  migrated = true;
+  return driver.handle ? driver.handle() : driver;
 }
 
 export function closeDb() {
-  if (database) {
-    database.close();
-    database = null;
-  }
+  driver.close();
+  migrated = false;
 }
 
 // --------------------------------------------------------------- helpers ----
@@ -41,11 +71,13 @@ export function closeDb() {
 const plain = (row) => (row ? { ...row } : row);
 
 export function all(sql, params = []) {
-  return getDb().prepare(sql).all(...normalise(params)).map(plain);
+  ensureReady();
+  return driver.all(sql, normalise(params)).map(plain);
 }
 
 export function get(sql, params = []) {
-  const row = getDb().prepare(sql).get(...normalise(params));
+  ensureReady();
+  const row = driver.get(sql, normalise(params));
   return row ? plain(row) : undefined;
 }
 
@@ -70,8 +102,9 @@ export function get(sql, params = []) {
  * the client.
  */
 export function run(sql, params = []) {
+  ensureReady();
   try {
-    return getDb().prepare(sql).run(...normalise(params));
+    return driver.run(sql, normalise(params));
   } catch (error) {
     if (/FOREIGN KEY constraint failed/i.test(error.message)) {
       logger.debug('foreign key constraint rejected a write', { sql: sql.slice(0, 120) });
@@ -82,24 +115,18 @@ export function run(sql, params = []) {
 }
 
 export function exec(sql) {
-  return getDb().exec(sql);
+  ensureReady();
+  return driver.exec(sql);
 }
 
 export function transaction(fn) {
-  const db = getDb();
-  db.exec('BEGIN');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      db.exec('ROLLBACK');
-    } catch (rollbackError) {
-      logger.error('rollback failed', { error: rollbackError.message });
-    }
-    throw error;
-  }
+  ensureReady();
+  return driver.transaction(fn);
+}
+
+/** Open the engine and apply the schema once, on the first query of the process. */
+function ensureReady() {
+  if (!migrated) getDb();
 }
 
 // SQLite only accepts null/number/bigint/string/Buffer. Booleans, dates,
@@ -163,4 +190,7 @@ export function hydrate(row, jsonFields = [], defaults = {}) {
   return out;
 }
 
-export default { getDb, migrate, closeDb, all, get, run, exec, transaction, insert, update, upsert, parseJson, hydrate };
+export default {
+  getDb, migrate, closeDb, setDriver, activeDriver,
+  all, get, run, exec, transaction, insert, update, upsert, parseJson, hydrate,
+};

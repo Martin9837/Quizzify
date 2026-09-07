@@ -5,14 +5,17 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import config from './config.js';
 import logger from './lib/logger.js';
-import { getDb } from './db/index.js';
+import { get } from './db/index.js';
 import apiRouter from './routes/index.js';
 import { requestContext, securityHeaders } from './middleware/requestContext.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { connectionCount } from './services/realtime/index.js';
 import { stats as queueStats } from './services/queue/index.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// `import.meta.url` is undefined on Workers, where computing this at module
+// scope threw before any route was registered. It is only needed to find the
+// built client on disk, which a host without a filesystem does not serve.
+const moduleDir = () => (import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : '');
 
 /**
  * Origins the installed mobile app loads its own bundle from. Capacitor serves
@@ -69,7 +72,8 @@ export function createApp() {
   app.get('/health', (req, res) => {
     let dbOk = true;
     try {
-      getDb().prepare('SELECT 1').get();
+      // Through the db helpers, so the check works on whichever engine is installed.
+      get('SELECT 1 AS ok');
     } catch {
       dbOk = false;
     }
@@ -88,8 +92,9 @@ export function createApp() {
   app.use('/api/v1', apiRouter);
 
   // Serve the built SPA when it exists, so a single process can host both.
-  const webDist = path.resolve(__dirname, '../../web/dist');
-  if (fs.existsSync(webDist)) {
+  const here = moduleDir();
+  const webDist = here ? path.resolve(here, '../../web/dist') : '';
+  if (webDist && fs.existsSync(webDist)) {
     // The service worker decides when every other asset is refreshed, so it must
     // not itself be served from a stale cache -- otherwise a deploy can take an
     // hour to reach an installed client. Revalidate it on every request.
