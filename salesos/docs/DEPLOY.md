@@ -40,24 +40,39 @@ origin against the API on another, with no proxy, and checks deep links, a
 cross-origin sign-in, the admin dashboard rendering real data, and that every
 request goes to the API origin.
 
-## The API is not a Workers app
+## The API on Cloudflare: a Durable Object, not a Worker
 
-Cloudflare Workers cannot run this server, and the gap is not a configuration
-detail:
+The API keeps its database in a local SQLite file and reaches it through 478
+synchronous calls across 36 files. Anything that makes those asynchronous
+cascades: 99 exported service functions change signature, and the 21 routers
+above them follow. That single fact decides which Cloudflare product can host
+this server.
 
-| What the server does | Workers equivalent | Cost to move |
-| --- | --- | --- |
-| 570 synchronous `node:sqlite` calls across 36 files | D1, which is async | Every call becomes `await`, and async cascades through the services and routes above them |
-| Express, 21 routers | Hono or itty-router | Rewrite the HTTP layer |
-| Job queue with in-process workers | Cloudflare Queues | Rewrite the queue; Workers are request-scoped |
-| 4 `setInterval` scheduler loops | Cron Triggers | Rewrite scheduling |
-| SSE with an in-memory per-org connection registry | Durable Objects | Rewrite realtime; isolates share no memory |
-| Local encrypted recording storage, 5 `fs` call sites | R2 | Rewrite the storage provider |
-| `scrypt` password hashing, 8 call sites | Web Crypto / `nodejs_compat` | Verify availability and CPU limits |
+| | Local SQLite | Synchronous SQL | FTS5 | Long-lived process |
+| --- | --- | --- | --- | --- |
+| Workers alone | `node:sqlite` is a non-functional stub | -- | -- | no |
+| Workers + D1 | no | **no**, every method is awaited | yes | no |
+| Containers | disk is ephemeral, no volumes | -- | -- | yes |
+| **Durable Object** | **yes, per object** | **yes** | **yes** | **yes** |
 
-That is a port, not a deployment. The provider abstractions make each piece
-replaceable in isolation, so it is achievable — but it is a project, and nothing
-about it is a prerequisite for getting the product live.
+A Durable Object exposes SQLite through `ctx.storage.sql.exec()`, which returns
+a cursor rather than a promise, and `ctx.storage.transactionSync()`. That turns
+what would be a rewrite into a port: the db helpers keep their signatures, all
+478 call sites stay as written, and the object being single-threaded is what
+the in-memory rate limiter and the SSE connection registry already assume.
+
+This is verified against real workerd, not inferred -- 10 checks on the storage
+engine and 6 on Express serving from inside the object. See
+`../cloudflare/README.md` for what was tested, the two incompatibilities that
+have to be worked around (`express.json()` reaches `iconv-lite`, which does not
+load; and a Durable Object has no socket, so Express needs a small bridge), and
+the list of what still has to change. The spike is runnable.
+
+D1 remains a reasonable choice if you would rather pay the async migration than
+adopt Durable Objects -- it supports FTS5 and JSON1 -- but note its 100
+bound-parameter cap, that it has no interactive transactions (`BEGIN` is
+rejected, so the `transaction()` helper cannot port as a callback), and that
+having an FTS5 table disables `wrangler d1 export` for the whole database.
 
 ## Running the API
 
@@ -82,9 +97,35 @@ change `ENCRYPTION_KEY` and stored recordings cannot be decrypted.
 `DATABASE_FILE` must point at a persistent volume. On a platform with an
 ephemeral filesystem the database is lost on every deploy.
 
-To stay on Cloudflare, **Cloudflare Containers** runs a container image and
-keeps the Node process intact. Otherwise Fly.io, Render and Railway all take
-this shape directly.
+## Where recordings go
+
+By default call recordings are written to local disk under `STORAGE_ROOT`,
+AES-256-GCM encrypted. Anywhere without a persistent disk, point them at an
+S3-compatible bucket instead -- R2 included:
+
+```bash
+STORAGE_DRIVER=r2 \
+S3_BUCKET=salesos-recordings \
+S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com \
+S3_ACCESS_KEY_ID=... \
+S3_SECRET_ACCESS_KEY=...
+```
+
+`r2` and `s3` are the same SigV4 driver; the alias just says what you meant.
+For AWS, give `S3_REGION` and leave `S3_ENDPOINT` unset. The blob is sealed
+before it is uploaded, so the bucket never holds a recording it could read --
+which also means `ENCRYPTION_KEY` must survive, or the recordings are
+unreadable no matter who holds the bucket.
+
+Fly.io, Render and Railway all take this shape directly.
+
+**Cloudflare Containers does not**, despite running a container image: "all
+disk is ephemeral -- when a Container instance goes to sleep, the next time it
+is started, it will have a fresh disk", and there are no volumes. The Express
+app, the job workers and the scheduler loops would all run unchanged there --
+Containers has no maximum instance lifetime -- but the database would be lost
+on every sleep, so the data layer has to move regardless. To stay on
+Cloudflare, use a Durable Object, per the section above.
 
 ## Before it faces real users
 

@@ -1,0 +1,15 @@
+# Proves the storage engine: synchronous SQL, FTS5, JSON1, transactionSync.
+#   npx wrangler dev -c wrangler.sqlite.toml --local
+#   curl localhost:8787/
+name = "salesos-sqlite-probe"
+main = "src/sqlite-probe.js"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "APP"
+class_name = "AppObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AppObject"]

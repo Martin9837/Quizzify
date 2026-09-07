@@ -1,0 +1,21 @@
+# Proves the HTTP layer: Express 4 serving from inside the Durable Object.
+#   npx wrangler dev -c wrangler.express.toml --local
+#   curl localhost:8787/__probe
+name = "salesos-express-probe"
+main = "src/express-in-do.js"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+# Express's `json`/`urlencoded` are lazy getters, and esbuild's CJS interop
+# fires them at import time, so body-parser loads even when it is never called.
+# It reaches iconv-lite, which does not work on workerd.
+[alias]
+"iconv-lite" = "./src/iconv-stub.js"
+
+[[durable_objects.bindings]]
+name = "EXPRESS"
+class_name = "ExpressObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ExpressObject"]
