@@ -4,14 +4,15 @@ import path from 'node:path';
 import config from '../../config.js';
 import logger from '../../lib/logger.js';
 import { encryptBuffer, decryptBuffer, sha256 } from '../../lib/crypto.js';
+import { s3Driver } from './provider.s3.js';
 
 /**
  * Object storage abstraction for call recordings and voicemail.
  *
  * The local driver is a filesystem-backed implementation used in development
  * and single-node deployments; it writes AES-256-GCM encrypted blobs when
- * `STORAGE_ENCRYPT_AT_REST` is on. Swapping in S3 (or any compatible object
- * store) only requires implementing the same four methods.
+ * `STORAGE_ENCRYPT_AT_REST` is on. `s3` (and its alias `r2`) is the same
+ * contract over a signed HTTP API, for any host without a persistent disk.
  */
 
 const drivers = {};
@@ -59,26 +60,11 @@ drivers.local = {
   },
 };
 
-// S3 driver placeholder: the interface is defined so the integration can be
-// dropped in without touching call handling code.
-drivers.s3 = {
-  name: 's3',
-  async put() {
-    throw new Error('S3 storage driver not configured. Set STORAGE_DRIVER=local or provide an S3 implementation.');
-  },
-  async get() {
-    throw new Error('S3 storage driver not configured.');
-  },
-  async head() {
-    return null;
-  },
-  async delete() {
-    return false;
-  },
-  async exists() {
-    return false;
-  },
-};
+// One SigV4 implementation serves every S3-compatible store. `r2` is the same
+// driver under the name people reach for, so a Cloudflare deployment reads as
+// STORAGE_DRIVER=r2 rather than as S3 pointed somewhere unexpected.
+drivers.s3 = s3Driver;
+drivers.r2 = s3Driver;
 
 function driver() {
   return drivers[config.storage.driver] || drivers.local;

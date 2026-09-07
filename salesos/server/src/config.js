@@ -68,13 +68,16 @@ export const config = {
   },
 
   storage: {
-    driver: env.STORAGE_DRIVER || 'local', // local|s3
+    driver: env.STORAGE_DRIVER || 'local', // local|s3|r2
     root: env.STORAGE_ROOT || path.resolve(serverRoot, 'data/objects'),
     encryptAtRest: bool(env.STORAGE_ENCRYPT_AT_REST, true),
     s3: {
       bucket: env.S3_BUCKET,
+      // R2 has no regions; the signer substitutes "auto" when an endpoint is set.
       region: env.S3_REGION,
       endpoint: env.S3_ENDPOINT,
+      accessKeyId: env.S3_ACCESS_KEY_ID,
+      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
     },
   },
 
