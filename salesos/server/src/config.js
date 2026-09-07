@@ -92,6 +92,14 @@ export const config = {
       maxTokens: int(env.ANTHROPIC_MAX_TOKENS, 4096),
       timeoutMs: int(env.AI_TIMEOUT_MS, 60000),
     },
+    // Speech-to-text, when an external provider is configured. `config.ai.sttUrl`
+    // was read but never defined, so this always fell through to the raw
+    // environment; it is a real setting now, with a deadline of its own.
+    stt: {
+      url: env.STT_URL || '',
+      apiKey: env.STT_API_KEY || '',
+      timeoutMs: int(env.STT_TIMEOUT_MS, 120000),
+    },
   },
 
   telephony: {
@@ -121,6 +129,12 @@ export const config = {
     concurrency: int(env.QUEUE_CONCURRENCY, 3),
     pollIntervalMs: int(env.QUEUE_POLL_MS, 750),
     enabled: bool(env.QUEUE_ENABLED, true),
+    // A handler that never returns would otherwise hold its slot for the life
+    // of the process. Generous enough for a slow transcription and analysis
+    // chain; short enough that a hang is recovered the same day.
+    jobTimeoutMs: int(env.QUEUE_JOB_TIMEOUT_MS, 300000),
+    // How long a job may sit 'running' before another worker may take it over.
+    abandonAfterSeconds: int(env.QUEUE_ABANDON_AFTER_SECONDS, 600),
   },
 
   scheduler: {

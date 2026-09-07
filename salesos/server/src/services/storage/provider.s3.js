@@ -104,6 +104,9 @@ async function request(method, key, { body, headers = {} } = {}) {
   const { host, ...sendable } = signed;
   return fetch(url, {
     method,
+    // A bucket that accepts the connection and then stalls would otherwise hold
+    // a queue slot for as long as the process lives.
+    signal: AbortSignal.timeout(30000),
     headers: {
       ...sendable,
       authorization: `AWS4-HMAC-SHA256 Credential=${cfg.accessKeyId}/${scope}, `

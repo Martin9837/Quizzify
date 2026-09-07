@@ -70,6 +70,51 @@ function claim() {
 
 const BACKOFF_SECONDS = [5, 30, 120, 600];
 
+/**
+ * Run a handler, but never wait on it forever.
+ *
+ * A handler that hangs held its concurrency slot for the life of the process,
+ * and with the default concurrency of three, three hung jobs stopped the queue
+ * outright -- no transcription, no analysis, no follow-ups, and nothing in the
+ * logs to say why. The 600s abandonment sweep did not help, because it only ran
+ * inside `startWorkers()`, so recovery meant a restart.
+ *
+ * Every outbound call in a handler already carries its own `AbortSignal`
+ * timeout; this is the floor beneath them, for a hang in our own code that no
+ * per-request deadline covers.
+ *
+ * A promise cannot be cancelled, so the underlying work may still be in flight
+ * after this rejects. What the timeout buys is the slot back and a job that
+ * retries through the normal backoff instead of one that is stuck for good.
+ */
+function withTimeout(promise, job) {
+  const ms = config.queue.jobTimeoutMs;
+  if (!ms || ms <= 0) return promise;
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(
+      `Handler for "${job.type}" did not finish within ${Math.round(ms / 1000)}s and was abandoned`,
+    )), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Requeue jobs whose worker died or hung, so they are not lost until a restart.
+ * Safe to call repeatedly: it only touches rows locked longer ago than the
+ * abandonment window.
+ */
+export function reclaimAbandoned() {
+  const { changes } = run(
+    `UPDATE jobs SET status = 'pending', locked_at = NULL, locked_by = NULL, updated_at = ?
+     WHERE status = 'running' AND locked_at < ?`,
+    [nowIso(), addSeconds(-config.queue.abandonAfterSeconds)],
+  );
+  if (changes) logger.warn('requeued abandoned jobs', { count: changes });
+  return changes;
+}
+
 async function runJob(job) {
   const handler = handlers.get(job.type);
   const started = Date.now();
@@ -87,7 +132,7 @@ async function runJob(job) {
   }
 
   try {
-    const result = await handler(payload, job);
+    const result = await withTimeout(handler(payload, job), job);
     run(`UPDATE jobs SET status = 'succeeded', result = ?, finished_at = ?, updated_at = ?, last_error = NULL WHERE id = ?`,
       [result === undefined ? null : JSON.stringify(result), nowIso(), nowIso(), job.id]);
     logger.debug('job succeeded', { type: job.type, jobId: job.id, ms: Date.now() - started });
@@ -106,8 +151,17 @@ async function runJob(job) {
   }
 }
 
+const RECLAIM_INTERVAL_MS = 60000;
+let lastReclaim = 0;
+
 async function tick() {
   if (stopped) return;
+  // Cheap: one indexed UPDATE a minute, and the only thing that recovers a job
+  // whose worker went away without finishing it.
+  if (Date.now() - lastReclaim >= RECLAIM_INTERVAL_MS) {
+    lastReclaim = Date.now();
+    reclaimAbandoned();
+  }
   while (running < config.queue.concurrency) {
     const job = claim();
     if (!job) break;
@@ -126,12 +180,10 @@ export function startWorkers() {
   }, config.queue.pollIntervalMs);
   timer.unref?.();
   // Requeue jobs abandoned by a previous process crash.
-  const recovered = run(
-    `UPDATE jobs SET status = 'pending', locked_at = NULL, locked_by = NULL WHERE status = 'running' AND locked_at < ?`,
-    [addSeconds(-600)],
-  );
+  const recovered = reclaimAbandoned();
+  lastReclaim = Date.now();
   logger.info('queue workers started', {
-    concurrency: config.queue.concurrency, handlers: handlers.size, recovered: recovered.changes,
+    concurrency: config.queue.concurrency, handlers: handlers.size, recovered,
   });
 }
 
@@ -191,4 +243,7 @@ export function retryJob(jobId) {
   ).changes;
 }
 
-export default { enqueue, registerHandler, startWorkers, stopWorkers, drain, stats, listJobs, retryJob, registeredTypes };
+export default {
+  enqueue, registerHandler, startWorkers, stopWorkers, drain, stats, listJobs, retryJob,
+  registeredTypes, reclaimAbandoned,
+};

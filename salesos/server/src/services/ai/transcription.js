@@ -206,7 +206,7 @@ function buildDialogue({ scenario, lead, deal, agentName, rand, targetSeconds })
 
 // ----------------------------------------------------------------- API ------
 export async function transcribe({ call, lead, deal, agentName, recording }) {
-  if (config.ai.sttUrl || process.env.STT_URL) return externalTranscribe({ call, recording });
+  if (config.ai.stt.url) return externalTranscribe({ call, recording });
 
   const rand = rng(call.id);
   const scenario = scenarioForStage(deal?.stage, rand);
@@ -240,14 +240,16 @@ export async function transcribe({ call, lead, deal, agentName, recording }) {
 
 /** Map an external STT response onto our transcript shape. */
 async function externalTranscribe({ call, recording }) {
-  const url = config.ai.sttUrl || process.env.STT_URL;
-  const apiKey = process.env.STT_API_KEY;
+  const url = config.ai.stt.url;
+  const apiKey = config.ai.stt.apiKey;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': recording?.contentType || 'audio/wav',
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
+    // Without a deadline a silent provider holds a queue slot indefinitely.
+    signal: AbortSignal.timeout(config.ai.stt.timeoutMs),
     body: recording?.buffer,
     signal: AbortSignal.timeout(180000),
   });
