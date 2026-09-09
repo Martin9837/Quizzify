@@ -62,11 +62,16 @@ fail, which is the half that catches a bridge quietly swallowing an error.
 ## Deploying
 
 ```bash
-npx wrangler login      # once
+git clone <this repo> && cd salesos/cloudflare/worker
+npm install
+npx wrangler login      # once, and skipped if you already are
 npm run deploy
 ```
 
-That is the whole thing. It prints the URL —
+That is the whole thing. `npm install` here is enough on its own -- this
+directory is deliberately outside the npm workspace and declares the
+dependencies the bundled server code needs (`express`, `cors`), so a clean
+clone does not need a root install first. It prints the URL —
 `https://salesos.<your-subdomain>.workers.dev` — and the password to sign in
 with.
 

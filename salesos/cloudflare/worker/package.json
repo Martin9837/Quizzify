@@ -11,6 +11,7 @@
     "coldstart": "node coldstart.mjs"
   },
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.22.2"
   },
   "devDependencies": {
