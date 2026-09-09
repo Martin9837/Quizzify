@@ -5,7 +5,7 @@ import { createApp } from '../../../server/src/app.js';
 import { registerWorkers } from '../../../server/src/services/queue/workers.js';
 import { drain } from '../../../server/src/services/queue/index.js';
 import { get } from '../../../server/src/db/index.js';
-import { purgeDemoData } from '../../../server/src/db/purge.js';
+import { purgeDemoData, resetSurvivorProfile } from '../../../server/src/db/purge.js';
 import logger from '../../../server/src/lib/logger.js';
 import { createExpressBridge } from './bridge.js';
 import schema from '../../../server/src/db/schema.sql';
@@ -155,20 +155,29 @@ export class SalesOsApi extends DurableObject {
     const token = this.env.SALESOS_PURGE;
     if (!token) return;
 
-    if ((await this.ctx.storage.get('salesos:purgeToken')) === token) return;
+    const applied = await this.ctx.storage.get('salesos:purgeToken');
+    if (applied === token) return;
 
-    const result = purgeDemoData({
+    const options = {
       // Named explicitly: without it the purge keeps the highest-ranking
       // admin, which on a seeded database is not the account anyone signs in
       // with -- so the cleanup would succeed and lock the operator out.
       keepUserEmail: this.env.SALESOS_KEEP_EMAIL || undefined,
       organizationName: this.env.SALESOS_ORG_NAME || undefined,
       adminName: this.env.SALESOS_ADMIN_NAME || undefined,
-    });
+    };
+
+    // A second token does NOT empty the database again. The demo records went
+    // with the first one; anything here now was created by the operator, and a
+    // later token -- raised to finish cleaning the two rows the first pass left
+    // half-seeded -- must not take their work with it. Only a deployment that
+    // has never purged deletes anything.
+    const result = applied ? resetSurvivorProfile(options) : purgeDemoData(options);
     // Recorded only after it succeeded, so a failure is retried on the next
     // start rather than being silently marked done.
     await this.ctx.storage.put('salesos:purgeToken', token);
-    logger.info('demo data purged on request', { token, keptUser: result.keptUser.email });
+    logger.info(applied ? 'surviving account reset on request' : 'demo data purged on request',
+      { token, keptUser: result.keptUser.email });
   }
 
   async fetch(request) {

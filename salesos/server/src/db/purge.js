@@ -49,28 +49,7 @@ const EMPTIED = [
 const REDUCED = ['organizations', 'users', 'sessions'];
 
 export function purgeDemoData({ keepUserId, keepUserEmail, organizationName, adminName } = {}) {
-  // Name the survivor. Guessing gets this wrong in a way that is not obvious
-  // afterwards: preferring the highest role picks the super_admin, which on a
-  // seeded database is not the account anyone has actually been signing in
-  // with -- so the purge succeeds and the operator is locked out of the only
-  // login they know.
-  let keeper;
-  if (keepUserId) keeper = get('SELECT * FROM users WHERE id = ?', [keepUserId]);
-  else if (keepUserEmail) keeper = get('SELECT * FROM users WHERE email = ?', [keepUserEmail]);
-  else {
-    keeper = get(`SELECT * FROM users WHERE role IN ('super_admin', 'admin')
-                  ORDER BY CASE role WHEN 'super_admin' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`);
-    if (keeper) {
-      logger.warn('no account named to keep; keeping the highest-ranking admin', { email: keeper.email });
-    }
-  }
-
-  if (!keeper) {
-    const asked = keepUserEmail || keepUserId;
-    throw badRequest(asked
-      ? `Refusing to purge: no account matches ${asked}, and deleting the rest would leave nobody able to sign in.`
-      : 'Refusing to purge: there is no admin account to keep, so nobody could sign in afterwards.');
-  }
+  const keeper = findKeeper({ keepUserId, keepUserEmail });
 
   const before = countRows();
   let after;
@@ -83,18 +62,7 @@ export function purgeDemoData({ keepUserId, keepUserEmail, organizationName, adm
     // Everyone else's sessions go; the keeper stays signed in.
     run('DELETE FROM sessions WHERE user_id != ?', [keeper.id]);
 
-    // The team it belonged to is gone.
-    run('UPDATE users SET team_id = NULL, updated_at = ? WHERE id = ?',
-      [new Date().toISOString(), keeper.id]);
-
-    if (adminName) {
-      run('UPDATE users SET name = ?, updated_at = ? WHERE id = ?',
-        [adminName, new Date().toISOString(), keeper.id]);
-    }
-    if (organizationName) {
-      run('UPDATE organizations SET name = ?, updated_at = ? WHERE id = ?',
-        [organizationName, new Date().toISOString(), keeper.organization_id]);
-    }
+    resetSurvivor(keeper, { organizationName, adminName });
 
     // Rebuilt from nothing, since every indexed record is gone. Kept out of the
     // table list because dropping rows from an FTS5 table needs its own delete.
@@ -129,11 +97,126 @@ export function purgeDemoData({ keepUserId, keepUserEmail, organizationName, adm
   });
 
   return {
-    keptUser: { id: keeper.id, email: keeper.email, role: keeper.role },
+    // The role reported is the one it now has, not the one it was found with.
+    keptUser: { id: keeper.id, email: keeper.email, role: 'super_admin' },
     organizationId: keeper.organization_id,
     before,
     after,
   };
+}
+
+/**
+ * Decide which account survives -- or refuse.
+ *
+ * Guessing gets this wrong in a way that is not obvious afterwards: preferring
+ * the highest role picks the super_admin, which on a seeded database is not the
+ * account anyone has actually been signing in with -- so the purge succeeds and
+ * the operator is locked out of the only login they know.
+ */
+function findKeeper({ keepUserId, keepUserEmail } = {}) {
+  let keeper;
+  if (keepUserId) keeper = get('SELECT * FROM users WHERE id = ?', [keepUserId]);
+  else if (keepUserEmail) keeper = get('SELECT * FROM users WHERE email = ?', [keepUserEmail]);
+  else {
+    keeper = get(`SELECT * FROM users WHERE role IN ('super_admin', 'admin')
+                  ORDER BY CASE role WHEN 'super_admin' THEN 0 ELSE 1 END, created_at ASC LIMIT 1`);
+    if (keeper) {
+      logger.warn('no account named to keep; keeping the highest-ranking admin', { email: keeper.email });
+    }
+  }
+
+  if (!keeper) {
+    const asked = keepUserEmail || keepUserId;
+    throw badRequest(asked
+      ? `Refusing to purge: no account matches ${asked}, and deleting the rest would leave nobody able to sign in.`
+      : 'Refusing to purge: there is no admin account to keep, so nobody could sign in afterwards.');
+  }
+
+  return keeper;
+}
+
+/**
+ * Put the two surviving rows back to the schema's own defaults.
+ *
+ * Emptying the tables was never the whole job. Both rows were written by the
+ * seed as well, and every column it invented was still sitting in them: a job
+ * title for a person who no longer exists, a fake direct line, an enterprise
+ * plan nobody bought, and -- the one that actually shows on screen -- a
+ * monthly call target of 420 that /analytics/dashboard divides by 21 and
+ * presents as today's goal.
+ *
+ * Split out because it is also the whole of the second pass: once the demo
+ * records are gone, cleaning these two rows must not come with another
+ * DELETE FROM every table.
+ */
+export function resetSurvivorProfile(options = {}) {
+  const keeper = findKeeper(options);
+  transaction(() => resetSurvivor(keeper, options));
+  return {
+    keptUser: { id: keeper.id, email: keeper.email, role: 'super_admin' },
+    organizationId: keeper.organization_id,
+  };
+}
+
+function resetSurvivor(keeper, { organizationName, adminName } = {}) {
+  const now = new Date().toISOString();
+
+  // Promoted to super_admin, not left as it was. Four permissions are
+  // super_admin-only -- org:write, org:delete, billing:write and
+  // retention:write -- so keeping an `admin` as the last account leaves
+  // PATCH /admin/organization permanently unreachable: the organisation
+  // could never be renamed again, because the account that could was the one
+  // just deleted. The survivor is the sole owner of its own organisation,
+  // which is the role a first account gets anyway.
+  run(`UPDATE users SET
+         role = 'super_admin',
+         team_id = NULL,
+         name = COALESCE(?, name),
+         title = NULL,
+         phone = NULL,
+         quota_amount = 0,
+         preferences = '{}',
+         timezone = 'UTC',
+         last_login_at = NULL,
+         created_at = ?,
+         updated_at = ?
+       WHERE id = ?`,
+  [adminName || null, now, now, keeper.id]);
+
+  // `settings` goes back to '{}' rather than to a copy of DEFAULT_ORG_SETTINGS:
+  // orgSettings() merges the defaults over whatever is stored, so an empty
+  // document *is* the defaults, and it keeps tracking them if they change.
+  const name = organizationName || currentOrgName(keeper.organization_id);
+  run(`UPDATE organizations SET
+         name = ?,
+         slug = ?,
+         plan = 'growth',
+         seats = 10,
+         timezone = 'UTC',
+         settings = '{}',
+         created_at = ?,
+         updated_at = ?
+       WHERE id = ?`,
+  [name, slugify(name, keeper.organization_id), now, now, keeper.organization_id]);
+}
+
+/**
+ * The organisation's current name, for when the caller did not supply one --
+ * the UPDATE sets name and slug together, so it needs a value either way.
+ */
+function currentOrgName(organizationId) {
+  return get('SELECT name FROM organizations WHERE id = ?', [organizationId])?.name || 'Organisation';
+}
+
+/**
+ * A slug for the renamed organisation. `slug` is UNIQUE and NOT NULL, and after
+ * a purge there is exactly one organisation, so a collision is impossible --
+ * but an empty result is, for a name written in a script the pattern does not
+ * cover, hence the fallback to the id.
+ */
+function slugify(name, organizationId) {
+  const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  return slug || organizationId;
 }
 
 /**
@@ -186,4 +269,4 @@ export function countRows() {
   return counts;
 }
 
-export default { purgeDemoData, countRows };
+export default { purgeDemoData, resetSurvivorProfile, countRows };

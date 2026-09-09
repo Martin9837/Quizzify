@@ -63,11 +63,17 @@ SCHEDULER_ENABLED = "false"  # cron drives the scheduler
 SALESOS_BOOTSTRAP = "off"
 
 # Removes the demo data on the next start, once. The token is recorded in the
-# object's storage after it succeeds, so redeploying does not repeat it --
-# change the value to run another purge. One organisation and one admin account
-# survive, because deleting the last account would make the deployment
-# unreachable: there is no way to create a user without being signed in as one.
-SALESOS_PURGE = "2026-09-09-remove-demo-data"
+# object's storage after it succeeds, so redeploying does not repeat it. One
+# organisation and one account survive, because deleting the last account would
+# make the deployment unreachable: there is no way to create a user without
+# being signed in as one, and that account is promoted to super_admin so
+# owner-level settings stay reachable.
+#
+# Raising the token again does NOT empty the database a second time. Once a
+# purge has been recorded, a new token only puts the two surviving rows back to
+# the schema's defaults -- everything else in the database by then was created
+# by whoever is using the app.
+SALESOS_PURGE = "2026-09-09-remove-demo-data-2"
 SALESOS_KEEP_EMAIL = "admin@northstar.demo"
 SALESOS_ORG_NAME = "My Organisation"
 SALESOS_ADMIN_NAME = "Admin"
