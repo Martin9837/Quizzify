@@ -58,7 +58,16 @@ STORAGE_DRIVER = "r2"
 QUEUE_ENABLED = "false"      # the alarm drives the queue, not setInterval
 SCHEDULER_ENABLED = "false"  # cron drives the scheduler
 
-# Load the demo organisation on the first request, but only into an empty
-# database and only when DEMO_PASSWORD is set -- see ensureBootstrapped(). Set
-# this to anything else, or remove it, for a deployment that starts empty.
-SALESOS_BOOTSTRAP = "demo"
+# Disarmed. It only ever fired into an empty database, but leaving it on would
+# re-seed the demo organisation if the database were ever emptied.
+SALESOS_BOOTSTRAP = "off"
+
+# Removes the demo data on the next start, once. The token is recorded in the
+# object's storage after it succeeds, so redeploying does not repeat it --
+# change the value to run another purge. One organisation and one admin account
+# survive, because deleting the last account would make the deployment
+# unreachable: there is no way to create a user without being signed in as one.
+SALESOS_PURGE = "2026-09-09-remove-demo-data"
+SALESOS_KEEP_EMAIL = "admin@northstar.demo"
+SALESOS_ORG_NAME = "My Organisation"
+SALESOS_ADMIN_NAME = "Admin"

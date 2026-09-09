@@ -6,3 +6,4 @@ shots/
 package-lock.json
 wrangler.prodshape.toml
 .secrets.json
+wrangler.purgetest.toml

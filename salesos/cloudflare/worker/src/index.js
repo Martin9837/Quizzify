@@ -5,6 +5,7 @@ import { createApp } from '../../../server/src/app.js';
 import { registerWorkers } from '../../../server/src/services/queue/workers.js';
 import { drain } from '../../../server/src/services/queue/index.js';
 import { get } from '../../../server/src/db/index.js';
+import { purgeDemoData } from '../../../server/src/db/purge.js';
 import logger from '../../../server/src/lib/logger.js';
 import { createExpressBridge } from './bridge.js';
 import schema from '../../../server/src/db/schema.sql';
@@ -64,6 +65,13 @@ export class SalesOsApi extends DurableObject {
         await this.ensureBootstrapped();
       } catch (error) {
         logger.error('bootstrap failed; the deployment will start empty', { error: error.message });
+      }
+      try {
+        await this.applyPurgeIfRequested();
+      } catch (error) {
+        // A failed purge leaves the data exactly as it was, which is the safe
+        // direction to fail in.
+        logger.error('purge failed; the data is unchanged', { error: error.message });
       }
     });
   }
@@ -129,6 +137,38 @@ export class SalesOsApi extends DurableObject {
     logger.info('bootstrapped a demo organisation', {
       organization: result?.organization, users: result?.users, leads: result?.leads,
     });
+  }
+
+  /**
+   * Remove the demo data, once.
+   *
+   * Gated on a token rather than a boolean, and the token last applied is
+   * recorded in the object's key-value storage -- which the purge itself does
+   * not touch. Redeploying with the same value does nothing; a purge happens
+   * again only when someone deliberately changes the token.
+   *
+   * That matters more later than it does now. Today this deployment holds
+   * nothing but seed data, but the same switch left armed as a boolean would
+   * empty a real database on every cold start.
+   */
+  async applyPurgeIfRequested() {
+    const token = this.env.SALESOS_PURGE;
+    if (!token) return;
+
+    if ((await this.ctx.storage.get('salesos:purgeToken')) === token) return;
+
+    const result = purgeDemoData({
+      // Named explicitly: without it the purge keeps the highest-ranking
+      // admin, which on a seeded database is not the account anyone signs in
+      // with -- so the cleanup would succeed and lock the operator out.
+      keepUserEmail: this.env.SALESOS_KEEP_EMAIL || undefined,
+      organizationName: this.env.SALESOS_ORG_NAME || undefined,
+      adminName: this.env.SALESOS_ADMIN_NAME || undefined,
+    });
+    // Recorded only after it succeeded, so a failure is retried on the next
+    // start rather than being silently marked done.
+    await this.ctx.storage.put('salesos:purgeToken', token);
+    logger.info('demo data purged on request', { token, keptUser: result.keptUser.email });
   }
 
   async fetch(request) {
