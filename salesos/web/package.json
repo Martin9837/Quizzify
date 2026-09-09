@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:pages": "vite build && cp pages/_redirects dist/_redirects"
+    "build:pages": "vite build && cp pages/_redirects dist/_redirects",
+    "lint": "node ../scripts/lint-web.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

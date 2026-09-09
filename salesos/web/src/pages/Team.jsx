@@ -281,7 +281,6 @@ export default function Team() {
                 { key: 'action', label: 'Recommended', render: (deal) => <span className="small secondary truncate">{deal.recommendedAction}</span> },
               ]}
               rows={dealsAtRisk}
-              rowKey={(deal) => deal.dealId}
             />
           )}
         </Card>

@@ -20,10 +20,10 @@
     "start": "npm run start --workspace server",
     "seed": "npm run seed --workspace server",
     "reset": "npm run reset --workspace server",
-    "test": "npm run test --workspace server",
+    "test": "npm run lint && npm run test --workspace server",
     "ios:sync": "npm run build && npx cap sync ios",
     "ios:open": "npx cap open ios",
-    "lint": "npm run lint --workspace server",
+    "lint": "npm run lint --workspace server && node scripts/lint-web.mjs",
     "build:pages": "npm run build:pages --workspace web"
   },
   "devDependencies": {

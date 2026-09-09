@@ -57,6 +57,15 @@ mkdirSync(dirname(secretsPath), { recursive: true });
 writeFileSync(secretsPath, `${JSON.stringify(secrets, null, 2)}\n`, { mode: 0o600 });
 
 // ------------------------------------------------------------------ build ---
+// The client build needs the workspace's dependencies, and `vite` installs into
+// the repo root's node_modules rather than web/ -- so on a fresh clone, where
+// only this directory has been installed, the build would fail on a missing
+// binary. Check for it rather than assuming someone ran the root install.
+if (!existsSync(resolve(repoRoot, 'node_modules/.bin/vite'))) {
+  console.log('Installing the workspace dependencies (first run in this clone)');
+  run('npm', ['install'], { cwd: repoRoot });
+}
+
 console.log('\nBuilding the dashboard');
 run('npm', ['run', 'build', '--prefix', resolve(repoRoot, 'web')]);
 
