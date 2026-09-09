@@ -4,16 +4,22 @@
   "private": true,
   "type": "module",
   "main": "src/index.js",
-  "engines": { "node": ">=22.5.0" },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "dev": "node --no-warnings --watch src/index.js",
     "start": "node --no-warnings src/index.js",
     "seed": "node --no-warnings src/db/seed.js",
     "reset": "node --no-warnings src/db/seed.js --reset",
-    "test": "node --no-warnings --test test/*.test.js"
+    "test": "npm run lint && node --no-warnings --test test/*.test.js",
+    "lint": "node scripts/lint.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }

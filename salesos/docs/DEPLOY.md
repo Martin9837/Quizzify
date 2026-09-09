@@ -1,43 +1,66 @@
 # Deploying SalesOS
 
-The client is static files and deploys to any CDN, Cloudflare Pages included.
-The API is a long-lived Node process with a local SQLite database, a background
-job queue and an SSE stream, and it needs somewhere that can run that.
+The client is static files. The API is a long-lived process with a SQLite
+database, a background job queue and an SSE stream, and it needs somewhere that
+can run that.
 
-Those two facts decide everything below.
+Those two facts decide everything below. On Cloudflare they land in the same
+place: one Worker, serving the dashboard as static assets and the API from a
+Durable Object.
 
-## The client on Cloudflare Pages
+## Both together, on one Worker
 
-The build is about 700 KB of static assets, so Pages serves it as-is.
+The recommended deployment. `cloudflare/worker/` holds it, and
+`cloudflare/worker/README.md` has the detail:
+
+```bash
+cd salesos/cloudflare/worker
+npx wrangler secret put JWT_SECRET
+npx wrangler secret put ENCRYPTION_KEY
+npm run deploy          # builds web/dist, then deploys the Worker with it
+```
+
+Same origin for both, which removes three things that otherwise have to be kept
+in step: there is no CORS to configure, no `WEB_ORIGINS` to maintain, and no API
+base URL compiled into the bundle — so the client never has to be rebuilt to
+point somewhere else. Verified end to end against workerd: 32 API checks and 23
+checks driving the real UI through a browser.
+
+## The client on its own, on Pages
+
+Still supported, and the right answer if the API lives somewhere other than
+Cloudflare. The build is about 700 KB of static assets.
 
 ```bash
 cd salesos
-VITE_API_BASE=https://api.your-domain.com npm run build
+VITE_API_BASE=https://api.your-domain.com npm run build:pages
 npx wrangler pages deploy web/dist --project-name salesos
 ```
 
-`VITE_API_BASE` is baked in at build time and matters: served from Pages the
-client and the API are on different origins, and with no base set the client
-uses relative URLs and asks Pages for `/api/v1/...`, which does not exist there.
-Rebuild to change it.
+Note `build:pages`, not `build`. It copies `web/pages/_redirects` into the
+output, which sends unmatched paths to `index.html` so a deep link renders
+instead of 404ing. That file is deliberately not in `web/public/`: served by a
+Worker the same rule is a redirect loop, because `index.html` is itself an
+asset, and wrangler warns about it on every deploy — see `web/pages/README.md`.
 
-Two files in `web/public/` configure Pages and ship with the build:
+`_headers` does stay in `web/public/`, because both paths honour it and both
+need it: `/sw.js` `no-cache` and the content-hashed `/assets/*` immutable. The
+service worker decides when everything else refreshes, so it must not itself be
+served stale — a cached worker delays a deploy.
 
-- `_redirects` sends unmatched paths to `index.html`, so a deep link like
-  `/admin/users` renders instead of 404ing. Static assets are matched first.
-- `_headers` marks `/sw.js` `no-cache` and the content-hashed `/assets/*`
-  immutable. The service worker decides when everything else refreshes, so it
-  must not itself be served stale — a cached worker delays a deploy.
-
-Then allow the Pages origin on the API, or every request is refused by CORS:
+`VITE_API_BASE` is baked in at build time and matters here: on Pages the client
+and the API are on different origins, and with no base set the client uses
+relative URLs and asks Pages for `/api/v1/...`, which does not exist there.
+Rebuild to change it. Then allow the Pages origin on the API, or every request
+is refused by CORS:
 
 ```bash
 WEB_ORIGINS=https://salesos.pages.dev,https://app.your-domain.com
 ```
 
-This topology is tested: `scratchpad/cdn.mjs` serves the built client on one
-origin against the API on another, with no proxy, and checks deep links, a
-cross-origin sign-in, the admin dashboard rendering real data, and that every
+This split topology is tested too: `scratchpad/cdn.mjs` serves the built client
+on one origin against the API on another, with no proxy, and checks deep links,
+a cross-origin sign-in, the admin dashboard rendering real data, and that every
 request goes to the API origin.
 
 ## The API on Cloudflare: a Durable Object, not a Worker

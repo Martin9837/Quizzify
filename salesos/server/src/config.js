@@ -126,7 +126,9 @@ export const config = {
     stt: {
       url: env.STT_URL || '',
       apiKey: env.STT_API_KEY || '',
-      timeoutMs: int(env.STT_TIMEOUT_MS, 120000),
+      // 180s was the hardcoded deadline before this became configurable; the
+      // default keeps it, so making it settable changed nothing on its own.
+      timeoutMs: int(env.STT_TIMEOUT_MS, 180000),
     },
   },
 

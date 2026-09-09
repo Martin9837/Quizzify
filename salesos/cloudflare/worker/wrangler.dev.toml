@@ -11,6 +11,20 @@ compatibility_flags = ["nodejs_compat"]
 [[rules]]
 type = "Text"
 globs = ["**/*.sql"]
+# Without this, this rule shadows wrangler's built-in ones and they are
+# silently dropped.
+fallthrough = true
+
+# The dashboard is served by this same Worker, from the built client. Assets are
+# matched first, `/api/*` and `/health` go to the Worker, and anything else
+# falls back to index.html so a deep link like /admin/users renders instead of
+# 404ing. Same origin as the API, which means no CORS to configure and no
+# API base URL baked into the bundle at build time.
+[assets]
+directory = "../../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/health"]
 
 [[durable_objects.bindings]]
 name = "API"

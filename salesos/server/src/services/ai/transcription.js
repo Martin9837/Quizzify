@@ -251,7 +251,6 @@ async function externalTranscribe({ call, recording }) {
     // Without a deadline a silent provider holds a queue slot indefinitely.
     signal: AbortSignal.timeout(config.ai.stt.timeoutMs),
     body: recording?.buffer,
-    signal: AbortSignal.timeout(180000),
   });
   if (!response.ok) throw new Error(`Transcription failed: HTTP ${response.status}`);
   const payload = await response.json();
