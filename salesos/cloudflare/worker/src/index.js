@@ -5,6 +5,7 @@ import { createApp } from '../../../server/src/app.js';
 import { registerWorkers } from '../../../server/src/services/queue/workers.js';
 import { drain } from '../../../server/src/services/queue/index.js';
 import { get } from '../../../server/src/db/index.js';
+import logger from '../../../server/src/lib/logger.js';
 import { createExpressBridge } from './bridge.js';
 import schema from '../../../server/src/db/schema.sql';
 
@@ -42,7 +43,29 @@ export class SalesOsApi extends DurableObject {
 
     this.app = createApp();
     this.serve = createExpressBridge(this.app);
-    this.booted = false;
+
+    // The documented way to initialise a Durable Object: it defers every
+    // incoming request until this finishes, so nothing can observe a
+    // half-seeded database. A memoised promise awaited from fetch() is not
+    // equivalent -- input gates protect storage calls, but awaiting other async
+    // work (the dynamic import, the seeder's own awaits) opens the gate and
+    // lets the next request interleave.
+    //
+    // Nothing in here may throw: a callback that rejects aborts the object, so
+    // a failed seed would take the entire application down rather than leaving
+    // it merely empty. An unseeded deployment is recoverable; a dead one is not.
+    ctx.blockConcurrencyWhile(async () => {
+      try {
+        await this.ensureAlarm();
+      } catch (error) {
+        logger.error('could not schedule the queue alarm', { error: error.message });
+      }
+      try {
+        await this.ensureBootstrapped();
+      } catch (error) {
+        logger.error('bootstrap failed; the deployment will start empty', { error: error.message });
+      }
+    });
   }
 
   /** The queue is driven by an alarm: a Durable Object has no interval that
@@ -62,38 +85,53 @@ export class SalesOsApi extends DurableObject {
   }
 
   /**
-   * Load the demo organisation, for trying the deployment out.
-   *
-   * Two conditions, both required: an explicit opt-in variable, and an
-   * environment that is not production. The seed creates four accounts on a
-   * published password, so it must not be reachable on anything real -- the
-   * committed configuration never sets the variable.
+   * Run the scheduled work. An RPC method rather than a URL: reached through a
+   * path, `/__cron` was a public, unauthenticated trigger for background work
+   * on the deployed Worker, because the entry handler forwards every request
+   * here. A method on the object cannot be addressed over HTTP at all.
    */
-  async seedDemoData() {
-    if (this.env.SALESOS_ALLOW_DEMO_SEED !== 'true') {
-      return Response.json({ error: 'not enabled' }, { status: 404 });
+  async runScheduled() {
+    await drain({ timeoutMs: 25_000 });
+    return { drained: true };
+  }
+
+  /**
+   * Give a fresh deployment something to sign in to.
+   *
+   * A deployed Worker starts with an empty database and no way to create the
+   * first account -- the seeder is a CLI entry point and there is no shell --
+   * so the URL would serve a login page that nobody could ever get past.
+   *
+   * Three conditions, all required, and it is a no-op once any of them fails:
+   *
+   *   - `SALESOS_BOOTSTRAP=demo` is set, so it never happens by accident.
+   *   - The database has no organisations, so it can never touch real data.
+   *     This is the load-bearing one: after the first run it can never fire
+   *     again, whatever the configuration says.
+   *   - `DEMO_PASSWORD` is set explicitly. The seeder's default is published in
+   *     this repository, and a public URL must not have accounts on it.
+   */
+  async ensureBootstrapped() {
+    if (this.bootstrapped) return;
+    this.bootstrapped = true;
+    if (this.env.SALESOS_BOOTSTRAP !== 'demo') return;
+
+    if (get('SELECT COUNT(*) AS n FROM organizations')?.n) return;
+
+    if (!process.env.DEMO_PASSWORD) {
+      logger.error('SALESOS_BOOTSTRAP is set but DEMO_PASSWORD is not; refusing to '
+        + 'create accounts on the password published in the repository');
+      return;
     }
-    if ((this.env.NODE_ENV || process.env.NODE_ENV) === 'production') {
-      return Response.json({ error: 'refused in production' }, { status: 403 });
-    }
-    const existing = get('SELECT COUNT(*) AS n FROM organizations')?.n || 0;
-    if (existing) return Response.json({ skipped: true, organizations: existing });
+
     const { seed } = await import('../../../server/src/db/seed.js');
     const result = await seed({ reset: false });
-    return Response.json({ seeded: true, result });
+    logger.info('bootstrapped a demo organisation', {
+      organization: result?.organization, users: result?.users, leads: result?.leads,
+    });
   }
 
   async fetch(request) {
-    if (!this.booted) {
-      this.booted = true;
-      await this.ensureAlarm();
-    }
-    const url = new URL(request.url);
-    if (url.pathname === '/__seed') return this.seedDemoData();
-    if (url.pathname === '/__cron') {
-      await drain({ timeoutMs: 25_000 });
-      return Response.json({ ok: true });
-    }
     return this.serve(request);
   }
 }
@@ -107,7 +145,6 @@ export default {
   /** Cron replaces the four setInterval scheduler loops. */
   async scheduled(controller, env) {
     adoptEnv(env);
-    const stub = env.API.getByName('salesos');
-    await stub.fetch(new Request('https://salesos.internal/__cron', { method: 'POST' }));
+    await env.API.getByName('salesos').runScheduled();
   },
 };

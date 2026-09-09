@@ -15,10 +15,16 @@ The recommended deployment. `cloudflare/worker/` holds it, and
 
 ```bash
 cd salesos/cloudflare/worker
-npx wrangler secret put JWT_SECRET
-npx wrangler secret put ENCRYPTION_KEY
-npm run deploy          # builds web/dist, then deploys the Worker with it
+npx wrangler login      # once
+npm run deploy
 ```
+
+That prints the URL — `https://salesos.<your-subdomain>.workers.dev` — and the
+generated password to sign in with. It builds the client, generates the secrets
+and uploads them with the first version, because the server refuses to boot in
+production without them and `wrangler secret put` cannot target a Worker that
+does not exist yet. The demo organisation loads on the first request, and only
+into an empty database.
 
 Same origin for both, which removes three things that otherwise have to be kept
 in step: there is no CORS to configure, no `WEB_ORIGINS` to maintain, and no API

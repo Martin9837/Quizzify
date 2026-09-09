@@ -42,4 +42,7 @@ AI_PROVIDER = "local"
 STORAGE_DRIVER = "local"
 QUEUE_ENABLED = "false"
 SCHEDULER_ENABLED = "false"
-SALESOS_ALLOW_DEMO_SEED = "true"
+# The same bootstrap production uses: an empty database plus DEMO_PASSWORD.
+SALESOS_BOOTSTRAP = "demo"
+# Local only. A deployment generates one -- see deploy.mjs.
+DEMO_PASSWORD = "Demo1234!"

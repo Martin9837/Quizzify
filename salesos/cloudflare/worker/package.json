@@ -6,8 +6,9 @@
     "dev": "wrangler dev -c wrangler.dev.toml --local --port 8787",
     "smoke": "node smoke.mjs",
     "parity": "node parity.mjs",
-    "deploy": "npm run build --prefix ../../web && wrangler deploy",
-    "dashboard": "node dashboard.mjs"
+    "deploy": "node deploy.mjs",
+    "dashboard": "node dashboard.mjs",
+    "coldstart": "node coldstart.mjs"
   },
   "dependencies": {
     "express": "^4.22.2"

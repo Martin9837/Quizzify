@@ -29,11 +29,14 @@ cd salesos/cloudflare/worker
 npm install
 cp .dev.vars.example .dev.vars          # local keys, never deployed
 npm run build --prefix ../../web        # the dashboard the Worker serves
-npx wrangler dev -c wrangler.dev.toml --local --port 8787
-curl -X POST localhost:8787/__seed      # the demo organisation
+npm run dev                             # http://localhost:8787
 npm run smoke                           # 32 checks over the real API
 npm run dashboard                       # 23 checks driving the real UI
+npm run coldstart                       # 12 concurrent requests at an empty object
 ```
+
+There is no seed step. The demo organisation loads by itself on the first
+request that reaches the object — see `ensureBootstrapped()`.
 
 `npm run dashboard` signs in through the browser and walks all sixteen routes
 the SPA declares, requiring each to render something that is not the client's
@@ -51,11 +54,6 @@ your quota — so an admin who owns no leads correctly sees zeros while still
 seeing every lead in the list views. The check signs in as an agent for that
 reason.
 
-`__seed` needs two conditions, both of which the production config withholds:
-`SALESOS_ALLOW_DEMO_SEED=true` and an environment that is not production. The
-demo accounts share a published password, so it must not be reachable on
-anything real.
-
 `parity.mjs` runs the same request sequence against a Node instance and the
 Durable Object and compares them. With a Node server on :4300 and the object on
 :8787, all 19 requests answer identically — including the ones that should
@@ -64,27 +62,74 @@ fail, which is the half that catches a bridge quietly swallowing an error.
 ## Deploying
 
 ```bash
-npx wrangler secret put JWT_SECRET
-npx wrangler secret put ENCRYPTION_KEY
+npx wrangler login      # once
+npm run deploy
+```
+
+That is the whole thing. It prints the URL —
+`https://salesos.<your-subdomain>.workers.dev` — and the password to sign in
+with.
+
+`deploy.mjs` exists because three things have to happen together and the
+obvious order does not work:
+
+- **The client is built first.** Assets are uploaded from `web/dist`, so
+  deploying without building ships whatever was there last, or nothing.
+- **The secrets go up with the first version**, via `--secrets-file`. In
+  production the server refuses to boot without `JWT_SECRET` and
+  `ENCRYPTION_KEY`, and `wrangler secret put` cannot target a Worker that does
+  not exist yet — so setting them afterwards means the first version is dead on
+  arrival.
+- **`DEMO_PASSWORD` is generated.** The bootstrap refuses to create accounts
+  without it, because the seeder's default password is published in this
+  repository and the deployment is a public URL.
+
+Secrets are kept in `.secrets.json` (gitignored, mode 600) and reused on later
+deploys, because replacing `JWT_SECRET` signs everyone out and replacing
+`ENCRYPTION_KEY` makes stored recordings unreadable.
+
+Recordings need a bucket, which is the one thing not automatic:
+
+```bash
 npx wrangler r2 bucket create salesos-recordings
-npm run deploy      # builds the client, then deploys both
 ```
 
-`npm run deploy` builds `web/dist` first on purpose: the assets are uploaded
-from that directory, so deploying without building ships whatever was there
-last — or nothing at all.
-
-Then add the R2 bucket for recordings:
-
-```toml
-[[r2_buckets]]
-binding = "RECORDINGS"
-bucket_name = "salesos-recordings"
-```
+Then point the storage driver at it with `S3_*` secrets — the driver speaks the
+S3 API, which is why it also works from Node. Until that is done, everything
+works except storing a recording; seeding and the whole dashboard do not touch
+object storage, which is verified.
 
 `WEB_ORIGINS` is not needed — the client is served from this same Worker, so
 nothing is cross-origin. Set `PUBLIC_URL` to the deployed URL, which the API
 uses when it builds links into emails.
+
+## The first request to a new deployment
+
+A deployed Worker starts with an empty database and no way to create the first
+account: the seeder is a CLI entry point and there is no shell. So the URL would
+serve a login page nobody could get past.
+
+`ensureBootstrapped()` loads the demo organisation, under three conditions that
+all have to hold:
+
+1. `SALESOS_BOOTSTRAP=demo` is set — never by accident.
+2. The database has no organisations. This is the load-bearing one: after the
+   first run it can never fire again, whatever the configuration says, so it
+   cannot touch real data.
+3. `DEMO_PASSWORD` is set. Without it the bootstrap logs an error and does
+   nothing rather than creating accounts on a password published in this repo.
+
+It runs inside `ctx.blockConcurrencyWhile()` in the constructor, which is the
+documented way to initialise a Durable Object: the runtime defers every incoming
+request until it finishes, so nothing observes a half-seeded database. A promise
+awaited from `fetch()` is not equivalent — input gates protect storage calls,
+but awaiting other async work opens the gate and lets the next request
+interleave. Nothing inside may throw, either: a rejected callback aborts the
+object, so a failed seed would take the application down instead of leaving it
+merely empty. Both failure paths are caught and logged.
+
+`npm run coldstart` fires twelve concurrent logins at an empty object and
+asserts they all see one consistently seeded database.
 
 Recordings go to R2 through `S3_*` credentials rather than the binding, because
 the storage driver speaks the S3 API and therefore also works from Node — see

@@ -1,5 +1,7 @@
-name = "salesos-api"
+name = "salesos"
 main = "src/index.js"
+# The name is the hostname: https://salesos.<your-subdomain>.workers.dev
+workers_dev = true
 compatibility_date = "2026-08-04"
 compatibility_flags = ["nodejs_compat"]
 
@@ -42,6 +44,11 @@ new_sqlite_classes = ["SalesOsApi"]
 [triggers]
 crons = ["* * * * *"]
 
+# Request logs and errors in the dashboard. Without this a 500 in production is
+# invisible.
+[observability]
+enabled = true
+
 [vars]
 NODE_ENV = "production"
 TELEPHONY_PROVIDER = "simulator"
@@ -50,3 +57,8 @@ AI_PROVIDER = "local"
 STORAGE_DRIVER = "r2"
 QUEUE_ENABLED = "false"      # the alarm drives the queue, not setInterval
 SCHEDULER_ENABLED = "false"  # cron drives the scheduler
+
+# Load the demo organisation on the first request, but only into an empty
+# database and only when DEMO_PASSWORD is set -- see ensureBootstrapped(). Set
+# this to anything else, or remove it, for a deployment that starts empty.
+SALESOS_BOOTSTRAP = "demo"
