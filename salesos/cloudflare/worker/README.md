@@ -43,6 +43,9 @@ deep-link fallback survives a full page load, that every API request goes to
 the page's own origin, and that an agent's dashboard shows real figures. Set
 `CHROMIUM_PATH` if a browser is already on the machine.
 
+All three harnesses take `BASE` (and `parity.mjs` also takes `NODE_BASE`), so
+they can be pointed at whichever port is free, or at a real deployment.
+
 Note the home dashboard is *personal* — "Calls today", "Who to call today",
 your quota — so an admin who owns no leads correctly sees zeros while still
 seeing every lead in the list views. The check signs in as an agent for that

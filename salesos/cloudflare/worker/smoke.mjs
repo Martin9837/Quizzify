@@ -1,5 +1,5 @@
 // The real API, over HTTP, served by a Durable Object.
-const B = 'http://127.0.0.1:8787';
+const B = process.env.BASE || 'http://127.0.0.1:8787';
 let pass = 0; const fails = [];
 const ok = (n, good, d = '') => { if (good) { pass++; console.log(`  ok    ${n}${d ? '   ' + d : ''}`); } else { fails.push(n); console.log(`  FAIL  ${n}   ${d}`); } };
 

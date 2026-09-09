@@ -1,7 +1,10 @@
 // The same request sequence against both engines. A difference in status or in
 // the shape of the answer is the only thing that matters here -- absolute
 // values differ because each has its own seeded dataset.
-const ENGINES = { node: 'http://127.0.0.1:4300', durableObject: 'http://127.0.0.1:8787' };
+const ENGINES = {
+  node: process.env.NODE_BASE || 'http://127.0.0.1:4300',
+  durableObject: process.env.BASE || 'http://127.0.0.1:8787',
+};
 
 const run = async (base) => {
   const login = async (email, password = 'Demo1234!') => {
