@@ -1,0 +1,134 @@
+# Deploys SalesOS to Cloudflare Workers.
+#
+# Why CI: Cloudflare's API is unreachable from some development environments
+# (an egress policy answering 403 to CONNECT on api.cloudflare.com, for
+# instance), and a GitHub runner has unrestricted network access. It also means
+# a deploy needs no local clone, no local toolchain and no local login.
+#
+# Required repository secret:
+#   CLOUDFLARE_API_TOKEN   an "Edit Cloudflare Workers" token
+#
+# Optional repository secrets. Each is generated and stored on Cloudflare on the
+# first run if absent, so they stay stable across deploys -- which matters:
+# changing JWT_SECRET signs every session out, and changing ENCRYPTION_KEY makes
+# stored recordings unreadable.
+#   JWT_SECRET  ENCRYPTION_KEY  DEMO_PASSWORD  CLOUDFLARE_ACCOUNT_ID
+name: Deploy to Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm a public deployment'
+        required: true
+        default: ''
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Refuse unless confirmed
+        if: inputs.confirm != 'deploy'
+        run: |
+          echo "::error::This publishes a public URL. Re-run with confirm=deploy."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check the token is present
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      # The workspace root carries vite; cloudflare/worker carries the bundle's
+      # own dependencies. Both are needed and they are separate installs.
+      - name: Install
+        working-directory: salesos
+        run: |
+          npm install
+          npm install --prefix cloudflare/worker
+
+      - name: Lint and test
+        working-directory: salesos
+        run: npm test
+
+      # Secrets live on Cloudflare, not in this workflow between runs, so only
+      # the missing ones are written -- an existing deployment keeps its keys
+      # and a redeploy signs nobody out.
+      #
+      # They go up as part of the deploy via --secrets-file rather than with
+      # `wrangler secret put`, because that command cannot target a Worker that
+      # does not exist yet: on a first run the secrets have to travel with the
+      # upload, or the first version boots into a server that refuses to start
+      # without them.
+      - name: Work out which secrets are missing
+        id: secrets
+        working-directory: salesos/cloudflare/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          DEMO_PASSWORD: ${{ secrets.DEMO_PASSWORD }}
+        run: |
+          # An unknown Worker lists nothing, which is exactly the first-run case.
+          npx wrangler secret list > existing.json 2>/dev/null || echo '[]' > existing.json
+          node .github-deploy-secrets.cjs
+
+      - name: Build the dashboard
+        working-directory: salesos
+        run: npm run build
+
+      - name: Deploy
+        id: deploy
+        working-directory: salesos/cloudflare/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRITE_SECRETS: ${{ steps.secrets.outputs.write_secrets }}
+        run: |
+          set -uo pipefail
+          if [ "${WRITE_SECRETS:-no}" = "yes" ]; then
+            npx wrangler deploy --secrets-file secrets.json 2>&1 | tee deploy.log
+          else
+            npx wrangler deploy 2>&1 | tee deploy.log
+          fi
+          status=${PIPESTATUS[0]}
+          rm -f secrets.json
+          [ "$status" -eq 0 ] || exit "$status"
+          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          PASSWORD: ${{ steps.secrets.outputs.generated_password }}
+        run: |
+          {
+            echo "## SalesOS deployed"
+            echo
+            if [ -n "${URL:-}" ]; then echo "**$URL**"; else echo "See the deploy step for the URL."; fi
+            echo
+            echo "Sign in as \`admin@northstar.demo\`."
+            if [ -n "${PASSWORD:-}" ]; then
+              echo
+              echo "Generated password: \`$PASSWORD\`"
+              echo
+              echo "This is the only place it is shown. Change it from Admin -> Users,"
+              echo "because it now appears in this run's summary."
+            else
+              echo "The password is the DEMO_PASSWORD already stored on Cloudflare."
+            fi
+            echo
+            echo "The demo organisation loads on the first request, and only into an"
+            echo "empty database."
+          } >> "$GITHUB_STEP_SUMMARY"
