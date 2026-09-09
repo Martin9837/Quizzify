@@ -15,7 +15,15 @@
 #   JWT_SECRET  ENCRYPTION_KEY  DEMO_PASSWORD  CLOUDFLARE_ACCOUNT_ID
 name: Deploy to Cloudflare
 
+# The push trigger exists only to register this workflow. GitHub will not
+# dispatch a workflow that lives outside the default branch unless something has
+# registered it, and a dispatch-only file on a feature branch returns 404. The
+# job itself refuses to run for a push, so pushing this file registers it and
+# deploys nothing.
 on:
+  push:
+    paths:
+      - '.github/workflows/deploy-cloudflare.yml'
   workflow_dispatch:
     inputs:
       confirm:
@@ -25,6 +33,7 @@ on:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
