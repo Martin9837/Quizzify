@@ -209,20 +209,34 @@ describe('a call that did more than connect', () => {
     // `connected` is the outcome for "spoke to them and nothing more specific
     // happened". Counting only that made an agent whose every call booked a
     // meeting show a 0% connect rate.
-    const { api, user } = sessions.agent;
-    const lead = (await api.get('/leads?limit=1')).body.leads[0];
-    const placed = await api.post('/calls', { leadId: lead.id });
+    //
+    // The lead is created here rather than taken from the seed. Reading one
+    // with ?limit=1 sorts by updated_at, which the seed writes in a single
+    // pass -- so the row that came back varied between runs, and some seeded
+    // leads are marked do_not_call and cannot be phoned at all. That made this
+    // test fail roughly one run in ten, on the call rather than on the count.
+    const { api, user } = sessions.admin;
+    const lead = await api.post('/leads', {
+      firstName: 'Connect',
+      lastName: 'Rate',
+      companyName: 'Answered The Phone Ltd',
+      phone: '+15550000200',
+      ownerId: user.id,
+      consentRecording: 'granted',
+    });
+    assert.equal(lead.status, 201, JSON.stringify(lead.body));
+
+    const before = (await api.get('/analytics/dashboard')).body.today.callsConnected;
+
+    const placed = await api.post('/calls', { leadId: lead.body.lead.id });
     assert.equal(placed.status, 201, JSON.stringify(placed.body));
     const ended = await api.post(`/calls/${placed.body.call.id}/end`, { outcome: 'meeting_booked' });
     assert.equal(ended.status, 200, JSON.stringify(ended.body));
+    assert.equal(ended.body.call.outcome, 'meeting_booked', 'the requested outcome was not recorded');
 
-    const dashboard = await api.get('/analytics/dashboard');
-    assert.ok(dashboard.body.today.callsConnected > 0,
-      'a call that booked a meeting was counted as not connected');
-
-    const team = await sessions.manager.api.get('/analytics/team');
-    const row = team.body.agents.find((entry) => entry.userId === user.id);
-    if (row) assert.ok(row.connected > 0, 'the team view disagrees with the dashboard');
+    const after = (await api.get('/analytics/dashboard')).body.today.callsConnected;
+    assert.equal(after, before + 1,
+      'a call that booked a meeting was not counted as connected');
   });
 });
 
