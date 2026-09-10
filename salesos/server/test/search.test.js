@@ -34,14 +34,35 @@ describe('natural language query parsing', () => {
   });
 });
 
+/**
+ * A lead chosen the same way every run.
+ *
+ * These tests used `?limit=1`, which sorts by updated_at -- and the seed
+ * writes all 64 leads in one pass, so several share a millisecond and the row
+ * that came back was a coin toss. That is a proven flake: the same pattern
+ * failed a sibling test about one run in ten, because some seeded leads are
+ * marked do_not_call. The name also has to be one the search sanitiser keeps,
+ * or a hit is not expected in the first place.
+ */
+async function stableLead(api) {
+  const leads = (await api.get('/leads?limit=200&sort=first_name')).body.leads;
+  const usable = leads
+    .filter((lead) => (lead.lastName || lead.firstName || '').replace(/[^a-zA-Z0-9]/g, '').length > 1)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  assert.ok(usable.length, 'the seed should contain a lead with a searchable name');
+  return usable[0];
+}
+
 describe('search endpoints', () => {
   it('finds a lead by name', async () => {
     const { api } = await login(ACCOUNTS.manager);
-    const leads = (await api.get('/leads?limit=1')).body.leads;
-    const term = leads[0].lastName || leads[0].firstName;
+    const lead = await stableLead(api);
+    const term = lead.lastName || lead.firstName;
     const result = await api.get(`/search?q=${encodeURIComponent(term)}`);
     assert.equal(result.status, 200);
-    assert.ok(result.body.results.length > 0);
+    assert.ok(result.body.results.length > 0, `searching "${term}" found nothing`);
+    assert.ok(result.body.results.some((entry) => entry.entityId === lead.id),
+      `searching "${term}" did not return the lead it came from`);
     assert.ok(result.body.results.every((entry) => entry.href), 'every hit should be linkable');
   });
 
@@ -65,7 +86,7 @@ describe('search endpoints', () => {
   it('does not leak another agent records through search', async () => {
     const other = await login(ACCOUNTS.otherAgent);
     const own = await login(ACCOUNTS.agent);
-    const ownLead = (await own.api.get('/leads?limit=1')).body.leads[0];
+    const ownLead = await stableLead(own.api);
     const result = await other.api.get(`/search?q=${encodeURIComponent(ownLead.lastName || ownLead.firstName)}`);
     const leaked = result.body.results.filter((entry) => entry.entityId === ownLead.id);
     assert.equal(leaked.length, 0, 'search must respect record scope');
