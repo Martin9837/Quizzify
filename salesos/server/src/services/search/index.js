@@ -1,5 +1,6 @@
 import { all, run, inList } from '../../db/index.js';
 import { startOfDay } from '../../lib/time.js';
+import { boundedInt } from '../../lib/validate.js';
 import logger from '../../lib/logger.js';
 import { LEAD_TEMPERATURES, LEAD_STATUSES, OBJECTION_CATEGORIES, STAGE_KEYS } from '../../lib/constants.js';
 
@@ -60,8 +61,18 @@ const STOPWORDS = new Set([
  * Structured search. `scope` restricts visibility:
  *   { type: 'own', userId } | { type: 'team', userIds } | { type: 'org' }
  */
-export function search({ organizationId, query, entityTypes, scope, since, until, limit = 40 }) {
+export function search({ organizationId, query, entityTypes, scope, since, until, limit = 40, requireMatch = true }) {
   const match = toMatchExpression(query);
+  // A query the sanitiser reduces to nothing -- "*", "%", "(", a single
+  // letter, only stopwords -- used to skip the MATCH clause and fall through
+  // to "the most recent of everything", so the search box answered `*` with
+  // every record in the organisation, labelled as results for `*`. If someone
+  // typed something and none of it can be matched, the answer is nothing.
+  //
+  // requireMatch is false for the natural-language path, where the filters
+  // parsed out of the sentence carry the query and the leftover words are
+  // noise rather than the search itself.
+  if (requireMatch && !match && String(query || '').trim()) return [];
   const params = [organizationId];
   let sql = `SELECT entity_type, entity_id, owner_id, lead_id, occurred_at, title,
                     snippet(search_index, 7, '[', ']', '...', 18) AS excerpt,
@@ -109,8 +120,18 @@ export function search({ organizationId, query, entityTypes, scope, since, until
       score: row.rank === null ? 0 : Math.round(Math.abs(row.rank) * 100) / 100,
     }));
   } catch (error) {
-    logger.warn('search failed', { error: error.message, query });
-    return [];
+    // FTS5 rejecting the expression means the sanitiser above let something
+    // through: answer with nothing rather than a 500, but log it as an error,
+    // because it is a bug in this function.
+    if (/fts5|malformed MATCH/i.test(error.message)) {
+      logger.error('search expression rejected by fts5', { error: error.message, query, match });
+      return [];
+    }
+    // Anything else -- a parameter SQLite will not bind, a renamed column --
+    // was being reported to the caller as "no results", which is
+    // indistinguishable from an empty database and hid a 500 for a query that
+    // was simply broken.
+    throw error;
   }
 }
 
@@ -164,7 +185,11 @@ export function parseNaturalQuery(input, { userId } = {}) {
   for (const range of RELATIVE_RANGES) {
     const m = text.match(range.re);
     if (!m) continue;
-    const days = range.dynamic ? Number.parseInt(m[1], 10) : range.days;
+    // Bounded: "last 999999999999 days" is a sentence a person can type into
+    // the search box, and an unbounded day count reaches Date as a value it
+    // cannot represent -- toISOString() then throws "Invalid time value" and
+    // the request 500s. Ten years is past the age of any record here.
+    const days = range.dynamic ? boundedInt(m[1], 0, { min: 0, max: 3650 }) : range.days;
     filters.since = startOfDay(new Date(), -Math.abs(days || 0));
     consume(range.re);
     break;
@@ -197,6 +222,12 @@ export function parseNaturalQuery(input, { userId } = {}) {
 export function naturalSearch({ organizationId, query, scope, userId, limit = 40 }) {
   const filters = parseNaturalQuery(query, { userId });
   const searchText = [filters.terms, ...filters.topics].filter(Boolean).join(' ');
+  // When the sentence yielded filters, they are the query -- "my leads from
+  // this week" leaves "show all from" behind, which matches nothing and must
+  // not be allowed to cancel the filters that did parse. With no filters and
+  // no matchable words there is nothing to answer.
+  const hasFilters = Boolean(filters.entityTypes.length || filters.temperature || filters.status
+    || filters.stage || filters.since || filters.ownerId || filters.topics.length);
   const results = search({
     organizationId,
     query: searchText || query,
@@ -204,6 +235,7 @@ export function naturalSearch({ organizationId, query, scope, userId, limit = 40
     scope: filters.ownerId ? { type: 'own', userId: filters.ownerId } : scope,
     since: filters.since,
     limit,
+    requireMatch: !hasFilters,
   });
   return { filters, results };
 }

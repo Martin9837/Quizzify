@@ -1,6 +1,6 @@
 import { all, get, parseJson, inList } from '../../db/index.js';
 import { startOfDay, endOfDay, nowIso } from '../../lib/time.js';
-import { OPEN_STAGE_KEYS, STAGE_MAP } from '../../lib/constants.js';
+import { OPEN_STAGE_KEYS, STAGE_MAP, CONNECTED_OUTCOMES_SQL } from '../../lib/constants.js';
 
 /**
  * Sales intelligence. Every function is a plain SQL query over the tenant's own
@@ -39,7 +39,7 @@ export function likelyToConvert({ organizationId, ownerIds = 'all', limit = 10 }
   const rows = all(
     `SELECT l.*, u.name AS owner_name,
        d.id AS deal_id, d.name AS deal_name, d.stage, d.value AS deal_amount, d.probability, d.expected_close_date,
-       (SELECT COUNT(*) FROM calls c WHERE c.lead_id = l.id AND c.outcome = 'connected') AS connected_calls,
+       (SELECT COUNT(*) FROM calls c WHERE c.lead_id = l.id AND c.outcome IN ${CONNECTED_OUTCOMES_SQL}) AS connected_calls,
        (SELECT COUNT(*) FROM emails e WHERE e.lead_id = l.id AND e.status = 'sent') AS emails_sent,
        (SELECT COUNT(*) FROM meetings m WHERE m.lead_id = l.id AND m.status != 'cancelled') AS meetings,
        (SELECT MAX(c.started_at) FROM calls c WHERE c.lead_id = l.id) AS last_call_at,
@@ -404,7 +404,7 @@ export function agentPerformance({ organizationId, since, until, teamId = null }
     `SELECT u.id, u.name, u.role, u.team_id, t.name AS team_name, u.quota_amount,
        (SELECT COUNT(*) FROM calls c WHERE c.agent_id = u.id AND c.started_at BETWEEN ? AND ?) AS calls,
        (SELECT COALESCE(SUM(c.talk_seconds), 0) FROM calls c WHERE c.agent_id = u.id AND c.started_at BETWEEN ? AND ?) AS talk_seconds,
-       (SELECT COUNT(*) FROM calls c WHERE c.agent_id = u.id AND c.outcome = 'connected' AND c.started_at BETWEEN ? AND ?) AS connected,
+       (SELECT COUNT(*) FROM calls c WHERE c.agent_id = u.id AND c.outcome IN ${CONNECTED_OUTCOMES_SQL} AND c.started_at BETWEEN ? AND ?) AS connected,
        (SELECT COUNT(*) FROM meetings m WHERE m.organizer_id = u.id AND m.starts_at BETWEEN ? AND ?) AS meetings,
        (SELECT COUNT(*) FROM deals d WHERE d.owner_id = u.id AND d.stage = 'won' AND d.closed_at BETWEEN ? AND ?) AS won,
        (SELECT COALESCE(SUM(d.value), 0) FROM deals d WHERE d.owner_id = u.id AND d.stage = 'won' AND d.closed_at BETWEEN ? AND ?) AS revenue,

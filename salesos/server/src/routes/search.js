@@ -3,6 +3,7 @@ import { all, get, parseJson, inList } from '../db/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { visibleUserIds } from '../middleware/auth.js';
 import * as searchService from '../services/search/index.js';
+import { boundedInt } from '../lib/validate.js';
 
 const router = Router();
 
@@ -55,7 +56,10 @@ function hrefFor(result) {
 // GET /search?q=...  -- global search
 router.get('/', asyncHandler(async (req, res) => {
   const query = String(req.query.q || '').trim();
-  if (!query) return res.json({ results: [], grouped: {}, query });
+  // The same keys the answered path returns. Omitting `total` here meant a
+  // client rendering `${total} results` printed "undefined results" the moment
+  // the box was cleared.
+  if (!query) return res.json({ query, results: [], grouped: {}, total: 0 });
   const entityTypes = req.query.types ? String(req.query.types).split(',') : undefined;
 
   const results = searchService.search({
@@ -63,7 +67,7 @@ router.get('/', asyncHandler(async (req, res) => {
     query,
     entityTypes,
     scope: scopeOf(req),
-    limit: Number(req.query.limit) || 40,
+    limit: boundedInt(req.query.limit, 40, { max: 200 }),
   });
   const enriched = enrich(req.auth.organizationId, results);
 
@@ -79,14 +83,27 @@ router.get('/', asyncHandler(async (req, res) => {
 // POST /search/natural  -- "hot leads I spoke with last week who mentioned pricing"
 router.post('/natural', asyncHandler(async (req, res) => {
   const query = String(req.body?.query || '').trim();
-  if (!query) return res.json({ results: [], filters: {}, query });
+  // Same shape as the answered path below, down to the key names: this used to
+  // return `filters` where the real response returns `interpretation`, so
+  // reading interpretation.searchTerms threw a TypeError on a blank query.
+  if (!query) {
+    return res.json({
+      query,
+      interpretation: {
+        entityTypes: [], temperature: null, status: null, stage: null,
+        since: null, topics: [], scopedToMe: false, searchTerms: '',
+      },
+      results: [],
+      total: 0,
+    });
+  }
 
   const { filters, results } = searchService.naturalSearch({
     organizationId: req.auth.organizationId,
     query,
     scope: scopeOf(req),
     userId: req.auth.userId,
-    limit: Number(req.body?.limit) || 40,
+    limit: boundedInt(req.body?.limit, 40, { max: 200 }),
   });
 
   // Post-filter on structured attributes the FTS index does not carry.

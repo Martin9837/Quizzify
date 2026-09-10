@@ -95,6 +95,16 @@ export function findDuplicate({ organizationId, dedupeKey, email, phoneE164 }) {
   return null;
 }
 
+/**
+ * A company named by id, in this organisation. Anything else is the caller's
+ * mistake, not a silently dropped field.
+ */
+function requireCompany(organizationId, companyId) {
+  const company = get('SELECT * FROM companies WHERE id = ? AND organization_id = ?', [companyId, organizationId]);
+  if (!company) throw notFound('Company');
+  return company;
+}
+
 export function ensureCompany({ organizationId, name, domain, industry, location }) {
   if (!name) return null;
   const existing = get('SELECT * FROM companies WHERE organization_id = ? AND LOWER(name) = ?', [organizationId, name.toLowerCase()]);
@@ -132,15 +142,24 @@ export function createLead({ organizationId, data, actorId, source = 'ui', autoA
     });
   }
 
-  const company = data.companyName
-    ? ensureCompany({ organizationId, name: data.companyName, industry: data.industry, location: data.location })
-    : null;
+  // An explicit companyId wins; otherwise the company is matched, and created
+  // if need be, from the name. companyId used to be accepted by nothing at all
+  // -- it was read back on every lead but silently dropped from the request
+  // that set it, so a lead created before its company, or spelled differently,
+  // could never be linked.
+  const company = data.companyId
+    ? requireCompany(organizationId, data.companyId)
+    : (data.companyName
+      ? ensureCompany({ organizationId, name: data.companyName, industry: data.industry, location: data.location })
+      : null);
 
   let ownerId = data.ownerId || null;
   let assignment = null;
   if (!ownerId && autoAssign) {
     assignment = assignLead({ organizationId, lead: { ...data, source: data.source } });
-    ownerId = assignment?.ownerId || null;
+    // Falls back to whoever is creating the lead, as createDeal already did.
+    // An unowned lead is invisible to the owner-scoped dashboard.
+    ownerId = assignment?.ownerId || actorId || null;
   }
 
   const row = {
@@ -275,6 +294,15 @@ export function updateLead({ organizationId, leadId, patch, actorId, source = 'u
     mapped.phone = patch.phone;
     mapped.phone_e164 = toE164(patch.phone, patch.country || before.country || 'US');
   }
+  if (patch.companyId !== undefined) {
+    mapped.company_id = patch.companyId ? requireCompany(organizationId, patch.companyId).id : null;
+  } else if (patch.companyName !== undefined && patch.companyName && !before.company_id) {
+    // Renaming an unlinked lead's company links it, the same way creating one
+    // does. Without this the column could only ever be set at creation.
+    mapped.company_id = ensureCompany({
+      organizationId, name: patch.companyName, industry: before.industry, location: before.location,
+    })?.id || null;
+  }
   if (patch.tags !== undefined) mapped.tags = JSON.stringify(patch.tags);
   if (patch.customFields !== undefined) {
     mapped.custom_fields = JSON.stringify({ ...parseJson(before.custom_fields, {}), ...patch.customFields });
@@ -307,16 +335,22 @@ export function updateLead({ organizationId, leadId, patch, actorId, source = 'u
   }
 
   if (mapped.owner_id && mapped.owner_id !== before.owner_id) {
-    notifications.notify({
-      organizationId,
-      userId: mapped.owner_id,
-      type: 'new_lead',
-      title: `Lead reassigned to you: ${after.first_name} ${after.last_name || ''}`.trim(),
-      body: after.company_name,
-      entityType: 'lead',
-      entityId: leadId,
-      link: `/leads/${leadId}`,
-    });
+    // Not to the person who did it. createLead already guards this with
+    // `ownerId !== actorId`; here it was missing, so taking a lead yourself
+    // sent you "Lead reassigned to you". The webhook still fires either way --
+    // an integration wants the assignment regardless of who made it.
+    if (mapped.owner_id !== actorId) {
+      notifications.notify({
+        organizationId,
+        userId: mapped.owner_id,
+        type: 'new_lead',
+        title: `Lead reassigned to you: ${after.first_name} ${after.last_name || ''}`.trim(),
+        body: after.company_name,
+        entityType: 'lead',
+        entityId: leadId,
+        link: `/leads/${leadId}`,
+      });
+    }
     webhooks.dispatch(organizationId, 'lead.assigned', { leadId, ownerId: mapped.owner_id, previousOwnerId: before.owner_id });
   }
 
@@ -409,6 +443,13 @@ export function createDeal({ organizationId, data, actorId, silent = false }) {
     risk_reasons: '[]',
     health: 'unknown',
     stage_entered_at: nowIso(),
+    // Set here as well as on transition. Without it a deal imported straight
+    // in as won or lost had closed_at NULL, and every revenue, win-rate and
+    // quota query filters on closed_at -- so /deals/pipeline reported the
+    // won value while /analytics/dashboard reported zero revenue for the same
+    // row, and one won plus one lost deal gave a win rate of 0%.
+    closed_at: ['won', 'lost'].includes(stage) ? nowIso() : null,
+    lost_reason: stage === 'lost' ? (data.lostReason || null) : null,
     position: nextPosition(organizationId, stage),
     custom_fields: JSON.stringify(data.customFields || {}),
     created_at: nowIso(),
@@ -432,15 +473,20 @@ export function createDeal({ organizationId, data, actorId, silent = false }) {
     body: [stage, row.product, row.decision_maker, row.timeline].filter(Boolean).join(' '),
   });
 
+  // `silent` suppresses the duplicate feed entry only. It used to suppress the
+  // audit row and the deal.created webhook as well, so a deal created
+  // alongside its lead -- the createDeal:true path -- appeared in no audit log
+  // and fired no webhook: an audit trail that records a creation depending on
+  // which entry point was used is not an audit trail.
   if (!silent) {
     activity.log({
       organizationId, leadId: row.lead_id, dealId: row.id, actorId, type: 'stage_change',
       refId: row.id, title: `Deal created: ${row.name}`,
       metadata: { stage, value: row.value },
     });
-    audit.record({ organizationId, actorId, action: 'deal.create', entityType: 'deal', entityId: row.id, after: row, source: 'ui' });
-    webhooks.dispatch(organizationId, 'deal.created', { dealId: row.id, leadId: row.lead_id, value: row.value });
   }
+  audit.record({ organizationId, actorId, action: 'deal.create', entityType: 'deal', entityId: row.id, after: row, source: 'ui' });
+  webhooks.dispatch(organizationId, 'deal.created', { dealId: row.id, leadId: row.lead_id, value: row.value });
   return dealView(row);
 }
 

@@ -32,6 +32,24 @@ const NATIVE_APP_ORIGINS = new Set([
   'ionic://localhost',
 ]);
 
+/**
+ * Seconds since this instance started serving.
+ *
+ * `process.uptime()` is a stub returning 0 on workerd, which is where this
+ * actually runs in production -- so /health reported an uptime of 0 forever,
+ * and any monitor watching for restarts saw one on every poll. Stamped on the
+ * first call rather than at module scope: a Durable Object evaluates its
+ * module long before it is asked to serve anything, and time in global scope
+ * on Workers is frozen until the first request.
+ */
+let firstServedAt = null;
+function uptimeSeconds() {
+  const node = typeof process?.uptime === 'function' ? Math.round(process.uptime()) : 0;
+  if (node > 0) return node;
+  if (firstServedAt === null) firstServedAt = Date.now();
+  return Math.round((Date.now() - firstServedAt) / 1000);
+}
+
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
@@ -81,7 +99,7 @@ export function createApp() {
       status: dbOk ? 'ok' : 'degraded',
       version: '1.0.0',
       environment: config.env,
-      uptimeSeconds: Math.round(process.uptime()),
+      uptimeSeconds: uptimeSeconds(),
       database: dbOk ? 'ok' : 'unavailable',
       realtimeConnections: connectionCount(),
       queue: { inFlight: queueStats().inFlight, handlers: queueStats().handlers.length },

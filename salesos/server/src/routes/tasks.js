@@ -8,6 +8,7 @@ import { notFound } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, ownerScopeClause, assertRecordAccess } from '../middleware/auth.js';
 import * as automation from '../services/automation/index.js';
+import { taskView } from '../lib/views.js';
 import * as activityService from '../services/activity.js';
 import * as audit from '../services/audit.js';
 import * as webhooks from '../services/webhooks.js';
@@ -15,28 +16,6 @@ import { indexRecord } from '../services/search/index.js';
 
 const router = Router();
 
-const taskView = (row) => ({
-  id: row.id,
-  leadId: row.lead_id,
-  dealId: row.deal_id,
-  callId: row.call_id,
-  assigneeId: row.assignee_id,
-  assigneeName: row.assignee_name,
-  createdBy: row.created_by,
-  title: row.title,
-  description: row.description,
-  type: row.type,
-  priority: row.priority,
-  status: row.status,
-  dueAt: row.due_at,
-  completedAt: row.completed_at,
-  source: row.source,
-  aiReason: row.ai_reason,
-  contactName: row.first_name ? `${row.first_name} ${row.last_name || ''}`.trim() : null,
-  companyName: row.company_name,
-  createdAt: row.created_at,
-  overdue: row.status === 'open' && row.due_at && new Date(row.due_at) < new Date(),
-});
 
 // GET /tasks
 router.get('/', requirePermission('task:write'), asyncHandler(async (req, res) => {

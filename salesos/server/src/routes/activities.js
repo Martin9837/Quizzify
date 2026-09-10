@@ -38,6 +38,9 @@ router.get('/', asyncHandler(async (req, res) => {
   }
 
   const where = `WHERE a.organization_id = ?${scope.sql}${filters.length ? ` AND ${filters.join(' AND ')}` : ''}`;
+  // The endpoint accepts limit and offset, so it owes the caller a total --
+  // without one there is no way to know whether another page exists.
+  const total = get(`SELECT COUNT(*) AS n FROM activities a ${where}`, params)?.n || 0;
   const rows = all(
     `SELECT a.*, l.first_name, l.last_name, l.company_name, u.name AS actor_name
      FROM activities a
@@ -48,6 +51,7 @@ router.get('/', asyncHandler(async (req, res) => {
   );
 
   res.json({
+    total,
     activities: rows.map((row) => ({
       id: row.id,
       type: row.type,

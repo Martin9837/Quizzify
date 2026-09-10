@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { all, get, parseJson, inList } from '../db/index.js';
 import { startOfDay, endOfDay, nowIso, addDays } from '../lib/time.js';
-import { PIPELINE_STAGES, STAGE_MAP, OPEN_STAGE_KEYS } from '../lib/constants.js';
+import { PIPELINE_STAGES, STAGE_MAP, OPEN_STAGE_KEYS, CONNECTED_OUTCOMES, CONNECTED_OUTCOMES_SQL } from '../lib/constants.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, visibleUserIds, ownerScopeClause } from '../middleware/auth.js';
 import { forbidden, badRequest } from '../lib/errors.js';
 import * as insights from '../services/ai/insights.js';
 import { orgSettings } from '../services/org.js';
+import { boundedInt } from '../lib/validate.js';
 
 /**
  * The owner/agent restriction for a scoped query, as one bound parameter.
@@ -67,7 +68,7 @@ router.get('/dashboard', requirePermission('analytics:read'), asyncHandler(async
     period: today,
     today: {
       callsMade: callsToday.length,
-      callsConnected: callsToday.filter((c) => c.outcome === 'connected').length,
+      callsConnected: callsToday.filter((c) => CONNECTED_OUTCOMES.includes(c.outcome)).length,
       callsMissed: callsToday.filter((c) => ['missed', 'no_answer'].includes(c.status)).length,
       talkMinutes: Math.round(callsToday.reduce((sum2, c) => sum2 + (c.talk_seconds || 0), 0) / 60),
       callTarget: Math.round((settings.quotas?.monthlyCallTarget || 400) / 21),
@@ -179,7 +180,14 @@ router.get('/dashboard', requirePermission('analytics:read'), asyncHandler(async
 router.get('/team', requirePermission('analytics:team'), asyncHandler(async (req, res) => {
   const org = req.auth.organizationId;
   const { since, until } = periodOf(req, 30);
-  const teamId = req.query.teamId || (req.auth.role === 'manager' ? req.auth.teamId : null);
+  // A manager may only ask about their own team. The client-supplied teamId was
+  // trusted outright, so a manager could read another team's per-agent revenue,
+  // quota and call scores by naming its id.
+  let teamId = req.query.teamId || null;
+  if (req.auth.scope !== 'org') {
+    if (teamId && teamId !== req.auth.teamId) throw forbidden('You can only view your own team');
+    teamId = req.auth.teamId || null;
+  }
 
   const agents = insights.agentPerformance({ organizationId: org, since, until, teamId });
   const ids = agents.map((a) => a.userId);
@@ -197,7 +205,7 @@ router.get('/team', requirePermission('analytics:team'), asyncHandler(async (req
 
   const callsByDay = all(
     `SELECT substr(started_at, 1, 10) AS day, COUNT(*) AS calls,
-            SUM(CASE WHEN outcome = 'connected' THEN 1 ELSE 0 END) AS connected,
+            SUM(CASE WHEN outcome IN ${CONNECTED_OUTCOMES_SQL} THEN 1 ELSE 0 END) AS connected,
             COALESCE(SUM(talk_seconds), 0) AS talk_seconds
      FROM calls WHERE organization_id = ?${agent.sql} AND started_at BETWEEN ? AND ?
      GROUP BY day ORDER BY day ASC`,
@@ -263,9 +271,14 @@ router.get('/team', requirePermission('analytics:team'), asyncHandler(async (req
       return { ...stage, deals: row?.deals || 0, value: row?.value || 0, weighted: Math.round(row?.weighted || 0) };
     }),
     callsByDay,
-    winLoss: insights.lossAnalysis({ organizationId: org, ownerIds: ids.length ? ids : 'all', since }),
-    objections: insights.objectionTrends({ organizationId: org, ownerIds: ids.length ? ids : 'all', since, limit: 8 }),
-    dealsAtRisk: insights.dealsAtRisk({ organizationId: org, ownerIds: ids.length ? ids : 'all', limit: 10 }),
+    // `ids` is passed through even when empty. It used to become 'all' -- so a
+    // team with no active members, or a manager whose team is empty, got the
+    // whole organisation's at-risk deals, loss reasons and objections back
+    // beside a set of zeroed totals. ownerClause() already reads [] as
+    // "matches nothing", which is what the rest of this handler does.
+    winLoss: insights.lossAnalysis({ organizationId: org, ownerIds: ids, since }),
+    objections: insights.objectionTrends({ organizationId: org, ownerIds: ids, since, limit: 8 }),
+    dealsAtRisk: insights.dealsAtRisk({ organizationId: org, ownerIds: ids, limit: 10 }),
   });
 }));
 
@@ -291,15 +304,23 @@ router.get('/funnel', requirePermission('analytics:read'), asyncHandler(async (r
     label: stage.label,
     deals: reached.find((r) => r.stage === stage.key)?.deals || 0,
   }));
+  // The denominator is the first stage that has any deals, not `new_lead`.
+  // Keying off stage zero looked right until the database was emptied: deals
+  // created afterwards go straight to the stage they are actually at, so
+  // `new_lead` sits at zero and every single conversionFromTop came back null
+  // -- the whole column dead, including for stages holding real deals.
+  const baseline = stages.find((stage) => stage.deals > 0);
   const withRates = stages.map((stage, index) => ({
     ...stage,
     conversionFromPrevious: index === 0 || !stages[index - 1].deals
       ? null
       : Math.round((stage.deals / stages[index - 1].deals) * 100),
-    conversionFromTop: stages[0].deals ? Math.round((stage.deals / stages[0].deals) * 100) : null,
+    conversionFromTop: baseline ? Math.round((stage.deals / baseline.deals) * 100) : null,
   }));
 
-  res.json({ funnel: withRates, since });
+  // Named, because "conversion from top" means something different when the
+  // top of the funnel is not where the deals came in.
+  res.json({ funnel: withRates, baselineStage: baseline?.stage ?? null, since });
 }));
 
 // GET /analytics/reports/:report
@@ -319,7 +340,7 @@ const REPORTS = {
     const scope = scopeFilter('c.agent_id', ids);
     return all(
     `SELECT substr(c.started_at, 1, 10) AS day, u.name AS agent, COUNT(*) AS calls,
-            SUM(CASE WHEN c.outcome = 'connected' THEN 1 ELSE 0 END) AS connected,
+            SUM(CASE WHEN c.outcome IN ${CONNECTED_OUTCOMES_SQL} THEN 1 ELSE 0 END) AS connected,
             ROUND(COALESCE(SUM(c.talk_seconds), 0) / 60.0, 1) AS talk_minutes
      FROM calls c LEFT JOIN users u ON u.id = c.agent_id
      WHERE c.organization_id = ? AND c.started_at BETWEEN ? AND ?${scope.sql}
@@ -327,19 +348,24 @@ const REPORTS = {
     [org, since, until, ...scope.params],
     );
   },
-  lead_sources: (org, ids) => {
+  // The window is applied, not just echoed. These two took (org, ids) and
+  // filtered on nothing, while the handler reported `period` on every
+  // response -- so a report for a window entirely in the future came back
+  // with all-time rows under a 2030 heading.
+  lead_sources: (org, ids, since, until) => {
     const scope = scopeFilter('l.owner_id', ids);
     return all(
     `SELECT l.source, COUNT(*) AS leads,
             SUM(CASE WHEN l.status = 'customer' THEN 1 ELSE 0 END) AS converted,
             COALESCE(SUM(l.deal_value), 0) AS pipeline_value,
             ROUND(AVG(l.score), 1) AS avg_score
-     FROM leads l WHERE l.organization_id = ? AND l.archived_at IS NULL${scope.sql}
+     FROM leads l WHERE l.organization_id = ? AND l.archived_at IS NULL
+       AND l.created_at BETWEEN ? AND ?${scope.sql}
      GROUP BY l.source ORDER BY leads DESC`,
-    [org, ...scope.params],
+    [org, since, until, ...scope.params],
     );
   },
-  deal_velocity: (org, ids) => {
+  deal_velocity: (org, ids, since, until) => {
     const scope = scopeFilter('d.owner_id', ids);
     return all(
     `SELECT h.to_stage AS stage,
@@ -348,9 +374,9 @@ const REPORTS = {
      FROM deal_stage_history h
      JOIN deals d ON d.id = h.deal_id
      LEFT JOIN deal_stage_history next_h ON next_h.deal_id = h.deal_id AND next_h.created_at > h.created_at
-     WHERE h.organization_id = ?${scope.sql}
+     WHERE h.organization_id = ? AND h.created_at BETWEEN ? AND ?${scope.sql}
      GROUP BY h.to_stage`,
-    [org, ...scope.params],
+    [org, since, until, ...scope.params],
     );
   },
   follow_up_performance: (org, ids, since) => {
@@ -400,14 +426,22 @@ const REPORTS = {
 };
 
 router.get('/reports/:report', requirePermission('report:export'), asyncHandler(async (req, res) => {
+  // Object.hasOwn, not a truthiness test on the lookup. Every object inherits
+  // `toString`, `constructor`, `valueOf` and friends, and all of them are
+  // truthy, so `/analytics/reports/toString` passed the guard: some returned
+  // 500s, and `toString` produced a 200 whose `rows` was the string
+  // "[object Undefined]" and whose `count` was that string's length, while
+  // `constructor` echoed the internal organisation id back to the caller.
+  if (!Object.hasOwn(REPORTS, req.params.report)) {
+    throw badRequest(`Unknown report. Available: ${Object.keys(REPORTS).join(', ')}`);
+  }
   const builder = REPORTS[req.params.report];
-  if (!builder) throw badRequest(`Unknown report. Available: ${Object.keys(REPORTS).join(', ')}`);
-  const { since, until } = periodOf(req, Number(req.query.days) || 90);
+  const { since, until } = periodOf(req, boundedInt(req.query.days, 90, { max: 3650 }));
   const rows = builder(req.auth.organizationId, scopeIds(req), since, until) || [];
 
   const format = String(req.query.format || 'json').toLowerCase();
   if (format === 'csv') {
-    const csv = toCsv(rows);
+    const csv = toCsv(rows, REPORT_COLUMNS[req.params.report]);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${req.params.report}-${nowIso().slice(0, 10)}.csv"`);
     return res.send(csv);
@@ -433,9 +467,31 @@ router.get('/reports', requirePermission('report:export'), asyncHandler(async (r
   });
 }));
 
-function toCsv(rows) {
-  if (!rows.length) return '';
-  const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+/**
+ * The columns each report produces, so an export with no rows still has a
+ * header line. Deriving them from the rows meant a report that matched nothing
+ * downloaded as a 0-byte file, which opens as a corrupt sheet rather than an
+ * empty one -- and gave the operator no way to tell "no data" from "export
+ * broke". Aliases match the SELECT in REPORTS above.
+ */
+const REPORT_COLUMNS = {
+  sales_performance: ['agent', 'deals_won', 'revenue', 'quota'],
+  calls: ['day', 'agent', 'calls', 'connected', 'talk_minutes'],
+  lead_sources: ['source', 'leads', 'converted', 'pipeline_value', 'avg_score'],
+  deal_velocity: ['stage', 'avg_days', 'transitions'],
+  follow_up_performance: ['agent', 'tasks', 'completed', 'overdue', 'ai_created'],
+  ai_call_insights: ['sentiment', 'calls', 'avg_score', 'avg_talk_ratio', 'avg_objections', 'avg_buying_signals'],
+  revenue: ['month', 'deals', 'revenue'],
+  win_loss: ['reason', 'deals', 'value', 'competitors', 'lost_most_at_stage'],
+};
+
+function toCsv(rows, columns) {
+  // Still derived from the rows when there are any: a report whose SELECT
+  // changes should not silently drop a column because this list went stale.
+  const headers = rows.length
+    ? [...new Set(rows.flatMap((row) => Object.keys(row)))]
+    : (columns || []);
+  if (!headers.length) return '';
   const escape = (value) => {
     if (value === null || value === undefined) return '';
     const str = typeof value === 'object' ? JSON.stringify(value) : String(value);

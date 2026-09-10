@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { all, get, parseJson } from '../db/index.js';
-import { validate } from '../lib/validate.js';
+import { validate, boundedInt } from '../lib/validate.js';
 import { notFound, badRequest, forbidden } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, visibleUserIds, assertRecordAccess } from '../middleware/auth.js';
@@ -91,7 +91,7 @@ router.get('/call-list', requirePermission('ai:assistant'), asyncHandler(async (
     callList: insights.callListForToday({
       organizationId: req.auth.organizationId,
       userId: req.query.userId && req.auth.scope !== 'own' ? req.query.userId : req.auth.userId,
-      limit: Number(req.query.limit) || 12,
+      limit: boundedInt(req.query.limit, 12, { max: 200 }),
     }),
   });
 }));
@@ -106,7 +106,7 @@ router.get('/suggestions', requirePermission('ai:suggestion:approve'), asyncHand
     entityType: req.query.entityType,
     entityId: req.query.entityId,
     status: req.query.status || 'pending',
-    limit: Number(req.query.limit) || 100,
+    limit: boundedInt(req.query.limit, 100, { max: 500 }),
   });
 
   // Group by batch so the review panel can show "6 updates from Tuesday's call".
@@ -364,9 +364,9 @@ router.get('/meeting-slots', requirePermission('meeting:write'), asyncHandler(as
     slots: automation.suggestMeetingSlots({
       organizationId: req.auth.organizationId,
       userId: req.auth.userId,
-      durationMinutes: Number(req.query.duration) || 30,
-      daysAhead: Number(req.query.days) || 5,
-      count: Number(req.query.count) || 5,
+      durationMinutes: boundedInt(req.query.duration, 30, { min: 5, max: 480 }),
+      daysAhead: boundedInt(req.query.days, 5, { min: 1, max: 60 }),
+      count: boundedInt(req.query.count, 5, { min: 1, max: 50 }),
     }),
   });
 }));

@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { all, get, run, parseJson } from '../db/index.js';
-import { validate, parsePagination } from '../lib/validate.js';
+import { validate, parsePagination, finiteNumber } from '../lib/validate.js';
 import { PIPELINE_STAGES, STAGE_KEYS, STAGE_MAP } from '../lib/constants.js';
-import { notFound, badRequest } from '../lib/errors.js';
+import { notFound, lostReasonRequired } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, ownerScopeClause, assertRecordAccess, visibleUserIds } from '../middleware/auth.js';
 import * as crm from '../services/crm.js';
@@ -45,7 +45,7 @@ router.get('/pipeline', requirePermission('deal:read'), asyncHandler(async (req,
   }
   if (req.query.minValue) {
     filters.push('d.value >= ?');
-    params.push(Number(req.query.minValue));
+    params.push(finiteNumber(req.query.minValue));
   }
   if (req.query.q) {
     filters.push('(d.name LIKE ? OR l.company_name LIKE ?)');
@@ -146,6 +146,10 @@ router.get('/', requirePermission('deal:read'), asyncHandler(async (req, res) =>
 // POST /deals
 router.post('/', requirePermission('deal:write'), asyncHandler(async (req, res) => {
   const data = validate(req.body, DEAL_SCHEMA);
+  // The same rule PATCH and /move enforce. Creating a deal already lost
+  // skipped it, so a reason-less lost deal could be written on the one path
+  // that never asks -- and win/loss analysis is the reason the field exists.
+  if (data.stage === 'lost' && !data.lostReason) throw lostReasonRequired();
   if (data.leadId) {
     const lead = get('SELECT owner_id FROM leads WHERE id = ? AND organization_id = ?', [data.leadId, req.auth.organizationId]);
     if (!lead) throw notFound('Lead');
@@ -215,7 +219,7 @@ router.patch('/:dealId', requirePermission('deal:write'), asyncHandler(async (re
   const patch = validate(req.body, DEAL_SCHEMA, { partial: true });
   if (patch.stage === 'lost' && !patch.lostReason) {
     const current = get('SELECT lost_reason FROM deals WHERE id = ?', [req.params.dealId]);
-    if (!current?.lost_reason) throw badRequest('A lost reason is required when marking a deal lost');
+    if (!current?.lost_reason) throw lostReasonRequired();
   }
   const deal = crm.updateDeal({
     organizationId: req.auth.organizationId, dealId: req.params.dealId, patch, actorId: req.auth.userId,
@@ -233,15 +237,7 @@ router.post('/:dealId/move', requirePermission('deal:write'), asyncHandler(async
   const existing = get('SELECT * FROM deals WHERE id = ? AND organization_id = ?', [req.params.dealId, req.auth.organizationId]);
   if (!existing) throw notFound('Deal');
   assertRecordAccess(req, existing.owner_id);
-  if (body.stage === 'lost' && !body.lostReason && !existing.lost_reason) {
-    return res.status(422).json({
-      error: {
-        code: 'lost_reason_required',
-        message: 'Tell us why this deal was lost - loss reasons are what make win/loss analysis useful.',
-      },
-      requestId: req.id,
-    });
-  }
+  if (body.stage === 'lost' && !body.lostReason && !existing.lost_reason) throw lostReasonRequired();
   const deal = crm.updateDeal({
     organizationId: req.auth.organizationId,
     dealId: req.params.dealId,

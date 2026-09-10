@@ -2,43 +2,20 @@ import { Router } from 'express';
 import { all, get, insert, run, parseJson } from '../db/index.js';
 import { id } from '../lib/ids.js';
 import { nowIso, startOfDay, endOfDay } from '../lib/time.js';
-import { validate } from '../lib/validate.js';
+import { validate, boundedInt } from '../lib/validate.js';
 import { notFound, badRequest } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, ownerScopeClause, assertRecordAccess } from '../middleware/auth.js';
 import * as activityService from '../services/activity.js';
 import * as automation from '../services/automation/index.js';
 import * as webhooks from '../services/webhooks.js';
+import { meetingView } from '../lib/views.js';
 import { indexRecord } from '../services/search/index.js';
 import { enqueue } from '../services/queue/index.js';
 import config from '../config.js';
 
 const router = Router();
 
-const meetingView = (row) => ({
-  id: row.id,
-  leadId: row.lead_id,
-  dealId: row.deal_id,
-  organizerId: row.organizer_id,
-  organizerName: row.organizer_name,
-  title: row.title,
-  description: row.description,
-  type: row.type,
-  location: row.location,
-  conferenceUrl: row.conference_url,
-  startsAt: row.starts_at,
-  endsAt: row.ends_at,
-  timezone: row.timezone,
-  attendees: parseJson(row.attendees, []),
-  status: row.status,
-  reminderMinutes: row.reminder_minutes,
-  inviteSentAt: row.invite_sent_at,
-  externalCalendar: row.external_calendar,
-  aiSuggested: Boolean(row.ai_suggested),
-  outcomeNotes: row.outcome_notes,
-  contactName: row.first_name ? `${row.first_name} ${row.last_name || ''}`.trim() : null,
-  companyName: row.company_name,
-});
 
 // GET /meetings
 router.get('/', requirePermission('meeting:write'), asyncHandler(async (req, res) => {
@@ -226,9 +203,9 @@ router.get('/slots/suggest', requirePermission('meeting:write'), asyncHandler(as
     slots: automation.suggestMeetingSlots({
       organizationId: req.auth.organizationId,
       userId: req.auth.userId,
-      durationMinutes: Number(req.query.duration) || 30,
-      daysAhead: Number(req.query.days) || 5,
-      count: Number(req.query.count) || 6,
+      durationMinutes: boundedInt(req.query.duration, 30, { min: 5, max: 480 }),
+      daysAhead: boundedInt(req.query.days, 5, { min: 1, max: 60 }),
+      count: boundedInt(req.query.count, 6, { min: 1, max: 50 }),
     }),
   });
 }));

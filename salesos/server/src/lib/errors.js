@@ -16,4 +16,9 @@ export const notFound = (what = 'Resource') => new AppError(404, 'not_found', `$
 export const conflict = (message, details) => new AppError(409, 'conflict', message, details);
 export const unprocessable = (message, details) => new AppError(422, 'unprocessable', message, details);
 export const tooManyRequests = (message = 'Rate limit exceeded') => new AppError(429, 'rate_limited', message);
+// Its own code because the pipeline board reacts to it: dropping a deal on
+// "lost" opens the reason prompt rather than showing an error toast.
+export const lostReasonRequired = () => new AppError(422, 'lost_reason_required',
+  'Tell us why this deal was lost - loss reasons are what make win/loss analysis useful.');
+
 export const upstream = (message, details) => new AppError(502, 'upstream_error', message, details);

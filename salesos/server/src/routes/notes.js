@@ -3,27 +3,15 @@ import { all, get, insert, run } from '../db/index.js';
 import { id } from '../lib/ids.js';
 import { nowIso } from '../lib/time.js';
 import { validate } from '../lib/validate.js';
-import { notFound } from '../lib/errors.js';
+import { notFound, badRequest } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, assertRecordAccess } from '../middleware/auth.js';
 import * as activityService from '../services/activity.js';
 import { indexRecord, removeFromIndex } from '../services/search/index.js';
+import { noteView } from '../lib/views.js';
 
 const router = Router();
 
-const noteView = (row) => ({
-  id: row.id,
-  leadId: row.lead_id,
-  dealId: row.deal_id,
-  callId: row.call_id,
-  authorId: row.author_id,
-  authorName: row.author_name,
-  body: row.body,
-  pinned: Boolean(row.pinned),
-  source: row.source,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
 
 // POST /notes
 router.post('/', requirePermission('note:write'), asyncHandler(async (req, res) => {
@@ -70,7 +58,11 @@ router.post('/', requirePermission('note:write'), asyncHandler(async (req, res) 
 
 // GET /notes?leadId=
 router.get('/', requirePermission('lead:read'), asyncHandler(async (req, res) => {
-  if (!req.query.leadId && !req.query.dealId) throw notFound('leadId or dealId');
+  // 400, not 404. This threw notFound, which told the client the resource was
+  // gone -- and produced the message "leadId or dealId not found", as though a
+  // record by that name had been looked up. /messages, the same check on the
+  // same kind of endpoint, answers 400.
+  if (!req.query.leadId && !req.query.dealId) throw badRequest('leadId or dealId is required');
   const rows = all(
     `SELECT n.*, u.name AS author_name FROM notes n LEFT JOIN users u ON u.id = n.author_id
      WHERE n.organization_id = ? AND ${req.query.leadId ? 'n.lead_id = ?' : 'n.deal_id = ?'}

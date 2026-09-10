@@ -7,6 +7,7 @@ import * as searchService from '../search/index.js';
 import anthropic from './provider.anthropic.js';
 import config from '../../config.js';
 import logger from '../../lib/logger.js';
+import { CONNECTED_OUTCOMES_SQL } from '../../lib/constants.js';
 
 /**
  * The AI sales assistant.
@@ -410,7 +411,7 @@ function myDay({ org, user }) {
   const to = endOfDay();
   return {
     callsToday: get(`SELECT COUNT(*) AS n FROM calls WHERE organization_id = ? AND agent_id = ? AND started_at BETWEEN ? AND ?`, [org, user.id, from, to])?.n || 0,
-    connectedToday: get(`SELECT COUNT(*) AS n FROM calls WHERE organization_id = ? AND agent_id = ? AND outcome = 'connected' AND started_at BETWEEN ? AND ?`, [org, user.id, from, to])?.n || 0,
+    connectedToday: get(`SELECT COUNT(*) AS n FROM calls WHERE organization_id = ? AND agent_id = ? AND outcome IN ${CONNECTED_OUTCOMES_SQL} AND started_at BETWEEN ? AND ?`, [org, user.id, from, to])?.n || 0,
     tasksDueToday: all(`SELECT id, title, type, priority, due_at, lead_id FROM tasks WHERE organization_id = ? AND assignee_id = ? AND status = 'open' AND due_at <= ? ORDER BY due_at ASC LIMIT 20`, [org, user.id, to]),
     meetingsToday: all(`SELECT id, title, starts_at, ends_at, lead_id FROM meetings WHERE organization_id = ? AND organizer_id = ? AND starts_at BETWEEN ? AND ? ORDER BY starts_at ASC`, [org, user.id, from, to]),
     followUpsPending: get(`SELECT COUNT(*) AS n FROM leads WHERE organization_id = ? AND owner_id = ? AND next_follow_up_at <= ?`, [org, user.id, to])?.n || 0,

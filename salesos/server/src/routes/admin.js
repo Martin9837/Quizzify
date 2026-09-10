@@ -109,14 +109,22 @@ router.patch('/users/:userId', requirePermission('user:write'), asyncHandler(asy
   if (before.role === 'super_admin' && req.auth.role !== 'super_admin') {
     throw forbidden('Only a super admin can modify another super admin');
   }
-  // Never allow the last active admin to be demoted or suspended.
-  if ((patch.role && patch.role === 'agent') || patch.status === 'suspended') {
+  // Never allow the last active administrator to lose access. This used to
+  // enumerate the two changes it feared -- role 'agent' and status
+  // 'suspended' -- and so let through role 'manager' and status 'invited',
+  // either of which empties the organisation of administrators for good:
+  // user:write is itself an admin permission, so nobody is left who can
+  // promote anyone back. Ask what the row would become instead.
+  const wasAdministrator = ['admin', 'super_admin'].includes(before.role) && before.status === 'active';
+  const staysAdministrator = ['admin', 'super_admin'].includes(patch.role ?? before.role)
+    && (patch.status ?? before.status) === 'active';
+  if (wasAdministrator && !staysAdministrator) {
     const admins = get(
       `SELECT COUNT(*) AS n FROM users WHERE organization_id = ? AND role IN ('admin','super_admin')
          AND status = 'active' AND id != ?`,
       [req.auth.organizationId, before.id],
     )?.n || 0;
-    if (!admins && ['admin', 'super_admin'].includes(before.role)) {
+    if (!admins) {
       throw badRequest('This is the last active administrator. Promote another user first.');
     }
   }

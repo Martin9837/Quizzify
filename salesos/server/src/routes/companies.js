@@ -13,22 +13,33 @@ const router = Router();
 // GET /companies
 router.get('/', requirePermission('company:read'), asyncHandler(async (req, res) => {
   const { limit, offset } = parsePagination(req.query, { defaultLimit: 50 });
+  // The filters are built once and shared by the page query and the count, so
+  // the two can never disagree about what is being counted.
   const params = [req.auth.organizationId];
-  let sql = `SELECT c.*,
-               (SELECT COUNT(*) FROM leads l WHERE l.company_id = c.id AND l.archived_at IS NULL) AS contact_count,
-               (SELECT COUNT(*) FROM deals d WHERE d.company_id = c.id AND d.stage NOT IN ('won','lost')) AS open_deals,
-               (SELECT COALESCE(SUM(d.value), 0) FROM deals d WHERE d.company_id = c.id AND d.stage NOT IN ('won','lost')) AS pipeline_value
-             FROM companies c WHERE c.organization_id = ?`;
+  let where = 'c.organization_id = ?';
   if (req.query.q) {
-    sql += ' AND (c.name LIKE ? OR c.domain LIKE ?)';
+    where += ' AND (c.name LIKE ? OR c.domain LIKE ?)';
     params.push(`%${req.query.q}%`, `%${req.query.q}%`);
   }
   if (req.query.industry) {
-    sql += ' AND c.industry = ?';
+    where += ' AND c.industry = ?';
     params.push(req.query.industry);
   }
-  sql += ' ORDER BY pipeline_value DESC, c.name ASC LIMIT ? OFFSET ?';
-  res.json({ companies: all(sql, [...params, limit, offset]), limit, offset });
+
+  // `total` alongside limit/offset, as every other collection endpoint
+  // returns. Without it a client paging this endpoint cannot tell whether
+  // there is another page, or render "showing N of M".
+  const total = get(`SELECT COUNT(*) AS n FROM companies c WHERE ${where}`, params)?.n || 0;
+  const companies = all(
+    `SELECT c.*,
+       (SELECT COUNT(*) FROM leads l WHERE l.company_id = c.id AND l.archived_at IS NULL) AS contact_count,
+       (SELECT COUNT(*) FROM deals d WHERE d.company_id = c.id AND d.stage NOT IN ('won','lost')) AS open_deals,
+       (SELECT COALESCE(SUM(d.value), 0) FROM deals d WHERE d.company_id = c.id AND d.stage NOT IN ('won','lost')) AS pipeline_value
+     FROM companies c WHERE ${where}
+     ORDER BY pipeline_value DESC, c.name ASC LIMIT ? OFFSET ?`,
+    [...params, limit, offset],
+  );
+  res.json({ companies, total, limit, offset });
 }));
 
 // POST /companies

@@ -279,10 +279,15 @@ export function ScoreRing({ score, size = 64, thickness = 6, label }) {
       <svg width={size} height={size} aria-hidden>
         <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--bg-active)" strokeWidth={thickness} />
         <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
-          <circle
-            cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={thickness}
-            strokeDasharray={`${(value / 100) * circumference} ${circumference}`} strokeLinecap="round"
-          />
+          {/* Omitted entirely at zero: a zero-length dash with a round cap
+              still paints a dot, so 0% read as a sliver of progress in the
+              danger colour. */}
+          {value > 0 && (
+            <circle
+              cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={thickness}
+              strokeDasharray={`${(value / 100) * circumference} ${circumference}`} strokeLinecap="round"
+            />
+          )}
         </g>
       </svg>
       <span className="score-value" style={{ color }}>{Math.round(value)}</span>
@@ -291,12 +296,22 @@ export function ScoreRing({ score, size = 64, thickness = 6, label }) {
 }
 
 /* --------------------------------------------------------------- funnel */
-export function FunnelChart({ stages, format = formatNumber }) {
-  const top = stages[0]?.deals || 1;
+export function FunnelChart({ stages, format = formatNumber, empty = null }) {
+  // Widths are relative to the widest stage, not to stages[0].
+  //
+  // With `stages[0]?.deals || 1` a first stage of zero made the denominator 1,
+  // so a stage holding two deals rendered at width: 200% -- the bar left its
+  // card, painted over the panel beside it and gave the page horizontal
+  // scroll. That is the normal state on a fresh account, where deals are
+  // created at the stage they are really at and nothing enters `new_lead`.
+  const widest = Math.max(0, ...stages.map((stage) => Number(stage.deals) || 0));
+  // Zero deals everywhere is not a funnel of eight full-colour stubs. Every
+  // other card in this row says so in words when it has nothing to draw.
+  if (!widest) return empty;
   return (
     <div className="col-tight">
       {stages.map((stage, index) => {
-        const width = Math.max(6, ((stage.deals || 0) / top) * 100);
+        const width = Math.max(6, ((stage.deals || 0) / widest) * 100);
         return (
           <div key={stage.stage} className="col-tight" style={{ gap: 3 }}>
             <div className="between small">

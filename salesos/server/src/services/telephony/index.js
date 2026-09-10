@@ -11,6 +11,7 @@ import device from './provider.device.js';
 import { enqueue } from '../queue/index.js';
 import { emitToOrg, emitToUser } from '../realtime/index.js';
 import * as activity from '../activity.js';
+import { CONNECTED_OUTCOMES } from '../../lib/constants.js';
 import * as audit from '../audit.js';
 import * as notifications from '../notifications/index.js';
 import * as webhooks from '../webhooks.js';
@@ -20,7 +21,14 @@ import { orgSettings } from '../org.js';
 const providers = { simulator, twilio, device };
 
 export function provider(name = config.telephony.provider) {
-  return providers[name] || simulator;
+  // A name that is not a provider is a configuration error, not a reason to
+  // fall back. Falling back meant a typo in TELEPHONY_PROVIDER placed
+  // simulated calls that look entirely real -- call records, events, activity
+  // entries and analytics -- with nothing anywhere saying the calls were fake.
+  if (!Object.hasOwn(providers, name)) {
+    throw new Error(`Unknown TELEPHONY_PROVIDER "${name}". Available: ${Object.keys(providers).join(', ')}.`);
+  }
+  return providers[name];
 }
 
 // ------------------------------------------------------ consent handling ----
@@ -336,7 +344,7 @@ export async function endCall({ organizationId, callId, outcome = null, notes = 
   // which is the closest thing available -- nothing reports when the callee
   // actually picked up.
   const answeredAt = call.answered_at
-    || (call.provider === 'device' && outcome === 'connected' ? startedAt : null);
+    || (call.provider === 'device' && CONNECTED_OUTCOMES.includes(outcome) ? startedAt : null);
   const talk = answeredAt ? Math.max(0, secondsBetween(answeredAt, endedAt) - (call.hold_seconds || 0)) : 0;
 
   const finalStatus = answeredAt ? status : status === 'completed' ? 'no_answer' : status;

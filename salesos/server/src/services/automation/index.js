@@ -58,15 +58,24 @@ export function assignLead({ organizationId, lead }) {
     return { ownerId: owner, ruleId: rule.id, ruleName: rule.name, strategy: rule.strategy };
   }
 
-  // No rule matched: fall back to the least loaded active agent.
+  // No rule matched: fall back to the least loaded active member, agents first.
+  //
+  // This used to require role = 'agent', which is nobody in a new
+  // organisation -- the first account is an administrator. So every lead the
+  // first user created came back with ownerId null, appeared in /leads, and
+  // was missing from the dashboard they had just been looking at, because that
+  // filters on owner_id = me. The CASE keeps a staffed organisation behaving
+  // exactly as before: an agent is always preferred over a manager or an
+  // admin, and only considered if none is available.
   const fallback = get(
     `SELECT u.id FROM users u
-     WHERE u.organization_id = ? AND u.role = 'agent' AND u.status = 'active'
-     ORDER BY (SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status IN ('new','contacted')) ASC,
+     WHERE u.organization_id = ? AND u.status = 'active'
+     ORDER BY CASE u.role WHEN 'agent' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
+              (SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status IN ('new','contacted')) ASC,
               u.created_at ASC LIMIT 1`,
     [organizationId],
   );
-  return fallback ? { ownerId: fallback.id, ruleId: null, ruleName: 'Default (least loaded agent)', strategy: 'least_loaded' } : null;
+  return fallback ? { ownerId: fallback.id, ruleId: null, ruleName: 'Default (least loaded member)', strategy: 'least_loaded' } : null;
 }
 
 function resolveOwner(organizationId, rule) {

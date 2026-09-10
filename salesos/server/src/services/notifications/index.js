@@ -70,6 +70,12 @@ export function listForUser(userId, { unreadOnly = false, limit = 50, offset = 0
   return all(sql, params).map((n) => ({ ...n, channels: parseJson(n.channels, ['in_app']) }));
 }
 
+/** How many the same filter would return unpaginated, for the list envelope. */
+export function countForUser(userId, { unreadOnly = false } = {}) {
+  const sql = `SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?${unreadOnly ? ' AND read_at IS NULL' : ''}`;
+  return get(sql, [userId])?.n || 0;
+}
+
 export function unreadCount(userId) {
   return get('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', [userId])?.n || 0;
 }
@@ -93,4 +99,4 @@ export function markAllRead(userId) {
   return result.changes;
 }
 
-export default { notify, notifyManagers, listForUser, unreadCount, markRead, markAllRead };
+export default { notify, notifyManagers, listForUser, countForUser, unreadCount, markRead, markAllRead };

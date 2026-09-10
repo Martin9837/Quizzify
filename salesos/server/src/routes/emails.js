@@ -10,37 +10,10 @@ import { requirePermission, ownerScopeClause, assertRecordAccess } from '../midd
 import { enqueue } from '../services/queue/index.js';
 import * as audit from '../services/audit.js';
 import * as activityService from '../services/activity.js';
+import { emailView } from '../lib/views.js';
 
 const router = Router();
 
-function emailView(row) {
-  return {
-    id: row.id,
-    leadId: row.lead_id,
-    dealId: row.deal_id,
-    callId: row.call_id,
-    userId: row.user_id,
-    direction: row.direction,
-    template: row.template,
-    to: row.to_address,
-    cc: parseJson(row.cc, []),
-    subject: row.subject,
-    body: row.body,
-    bodyFormat: row.body_format,
-    status: row.status,
-    generatedByAi: Boolean(row.generated_by_ai),
-    editedByHuman: Boolean(row.edited_by_human),
-    provider: row.provider,
-    sentAt: row.sent_at,
-    openedAt: row.opened_at,
-    repliedAt: row.replied_at,
-    error: row.error,
-    createdAt: row.created_at,
-    contactName: row.first_name ? `${row.first_name} ${row.last_name || ''}`.trim() : undefined,
-    companyName: row.company_name,
-    senderName: row.sender_name,
-  };
-}
 
 // GET /emails
 router.get('/', requirePermission('email:read'), asyncHandler(async (req, res) => {
@@ -183,6 +156,10 @@ router.get('/:emailId', requirePermission('email:read'), asyncHandler(async (req
 router.delete('/:emailId', requirePermission('email:send'), asyncHandler(async (req, res) => {
   const email = get('SELECT * FROM emails WHERE id = ? AND organization_id = ?', [req.params.emailId, req.auth.organizationId]);
   if (!email) throw notFound('Email');
+  // The only handler in this file that was missing it. email:send sits at
+  // agent rank, so without this any agent could delete a colleague's draft --
+  // every read and update path beside it already checks.
+  assertRecordAccess(req, email.user_id);
   if (email.status === 'sent') throw badRequest('A sent email cannot be deleted');
   run('DELETE FROM emails WHERE id = ?', [email.id]);
   res.json({ ok: true });

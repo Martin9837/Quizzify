@@ -106,7 +106,10 @@ export default function Analytics() {
       <div className="grid grid-main">
         <Card title="Conversion funnel" subtitle="Every deal that entered the pipeline in the period">
           {funnel.loading ? <Spinner /> : funnel.error ? <ErrorState error={funnel.error} /> : (
-            <FunnelChart stages={funnel.data?.funnel || []} />
+            <FunnelChart
+              stages={funnel.data?.funnel || []}
+              empty={<EmptyState title="No deals in the pipeline yet" />}
+            />
           )}
         </Card>
 

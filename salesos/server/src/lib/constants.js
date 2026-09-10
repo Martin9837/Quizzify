@@ -30,6 +30,25 @@ export const CALL_OUTCOMES = [
   'not_interested', 'meeting_booked', 'callback_requested', 'do_not_call',
 ];
 
+/**
+ * The outcomes that mean the prospect was actually reached.
+ *
+ * `connected` on its own means "spoke to them and nothing more specific
+ * happened", so counting only that made every better outcome read as a failure
+ * to connect: an agent whose every call booked a meeting showed a 0% connect
+ * rate. `wrong_number` is deliberately excluded -- somebody answered, but not
+ * the person being called -- as are voicemail, no_answer and busy.
+ */
+export const CONNECTED_OUTCOMES = [
+  'connected', 'meeting_booked', 'callback_requested', 'not_interested', 'do_not_call',
+];
+
+/**
+ * The same list as a SQL tuple, for the aggregate queries. Safe to interpolate
+ * because every value is a literal defined here, never user input.
+ */
+export const CONNECTED_OUTCOMES_SQL = `('${CONNECTED_OUTCOMES.join("','")}')`;
+
 export const TASK_TYPES = ['call', 'email', 'follow_up', 'demo', 'proposal', 'research', 'meeting'];
 export const TASK_PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 export const TASK_STATUSES = ['open', 'in_progress', 'done', 'cancelled'];

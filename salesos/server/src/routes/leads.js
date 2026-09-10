@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { all, get, run, parseJson } from '../db/index.js';
-import { validate, parsePagination, parseSort, EMAIL_PATTERN } from '../lib/validate.js';
+import { validate, parsePagination, parseSort, EMAIL_PATTERN, finiteNumber } from '../lib/validate.js';
+import { taskView, emailView, meetingView, noteView } from '../lib/views.js';
 import { LEAD_STATUSES, LEAD_TEMPERATURES, LEAD_SOURCES } from '../lib/constants.js';
 import { notFound, badRequest, forbidden } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -37,7 +38,7 @@ router.get('/', requirePermission('lead:read'), asyncHandler(async (req, res) =>
     assertRecordAccess(req, req.query.ownerId);
     addFilter('l.owner_id = ?', req.query.ownerId);
   }
-  if (req.query.minScore) addFilter('l.score >= ?', Number(req.query.minScore));
+  if (req.query.minScore) addFilter('l.score >= ?', finiteNumber(req.query.minScore));
   if (req.query.tag) addFilter('EXISTS (SELECT 1 FROM json_each(l.tags) WHERE json_each.value = ?)', req.query.tag);
   if (req.query.followUpBefore) addFilter('l.next_follow_up_at <= ?', req.query.followUpBefore);
   if (req.query.notContactedSince) addFilter('(l.last_contacted_at IS NULL OR l.last_contacted_at < ?)', req.query.notContactedSince);
@@ -110,6 +111,7 @@ const LEAD_SCHEMA = {
   firstName: { type: 'string', required: true, maxLength: 80 },
   lastName: { type: 'string', maxLength: 80 },
   companyName: { type: 'string', maxLength: 160 },
+  companyId: { type: 'string', maxLength: 40 },
   jobTitle: { type: 'string', maxLength: 120 },
   phone: { type: 'string', maxLength: 40 },
   secondaryPhone: { type: 'string', maxLength: 40 },
@@ -321,22 +323,28 @@ router.get('/:leadId', requirePermission('lead:read'), asyncHandler(async (req, 
       sentiment: call.sentiment,
       notes: call.notes,
     })),
+    // Through the same view mappers the dedicated endpoints use. These four
+    // used to return raw rows, so this screen received a different shape for
+    // the same records than /tasks, /emails, /meetings and /notes did --
+    // snake_case columns, organization_id, `pinned` as 1, and `attendees` as a
+    // JSON string rather than an array.
     tasks: all(
       `SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
        WHERE t.lead_id = ? ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 0 ELSE 1 END, t.due_at ASC LIMIT 25`,
       [lead.id],
-    ),
+    ).map(taskView),
     emails: all(
-      `SELECT id, subject, status, template, generated_by_ai, edited_by_human, sent_at, created_at, to_address
+      `SELECT id, lead_id, deal_id, call_id, user_id, direction, subject, status, template,
+              generated_by_ai, edited_by_human, provider, sent_at, opened_at, replied_at, created_at, to_address, cc
        FROM emails WHERE lead_id = ? ORDER BY created_at DESC LIMIT 25`,
       [lead.id],
-    ),
-    meetings: all('SELECT * FROM meetings WHERE lead_id = ? ORDER BY starts_at DESC LIMIT 20', [lead.id]),
+    ).map(emailView),
+    meetings: all('SELECT * FROM meetings WHERE lead_id = ? ORDER BY starts_at DESC LIMIT 20', [lead.id]).map(meetingView),
     notes: all(
       `SELECT n.*, u.name AS author_name FROM notes n LEFT JOIN users u ON u.id = n.author_id
        WHERE n.lead_id = ? ORDER BY n.pinned DESC, n.created_at DESC LIMIT 50`,
       [lead.id],
-    ),
+    ).map(noteView),
     messages: all('SELECT * FROM messages WHERE lead_id = ? ORDER BY created_at DESC LIMIT 30', [lead.id]),
     pendingSuggestions: (await import('../services/ai/extraction.js')).listSuggestions({
       organizationId: req.auth.organizationId, ownerIds: visibleUserIds(req), entityType: 'lead', entityId: lead.id, status: 'pending',
@@ -363,6 +371,12 @@ router.patch('/:leadId', requirePermission('lead:write'), asyncHandler(async (re
 
 // DELETE /leads/:id  (archive; hard delete is an admin-only data operation)
 router.delete('/:leadId', requirePermission('lead:delete'), asyncHandler(async (req, res) => {
+  // PATCH on the same record checks this and the bulk-archive branch checks it
+  // per lead; only the single delete went straight through, so a manager could
+  // archive a lead belonging to a team that is not theirs.
+  const existing = get('SELECT owner_id FROM leads WHERE id = ? AND organization_id = ?', [req.params.leadId, req.auth.organizationId]);
+  if (!existing) throw notFound('Lead');
+  assertRecordAccess(req, existing.owner_id);
   crm.archiveLead({ organizationId: req.auth.organizationId, leadId: req.params.leadId, actorId: req.auth.userId });
   res.json({ ok: true });
 }));
@@ -396,6 +410,13 @@ router.get('/:leadId/timeline', requirePermission('lead:read'), asyncHandler(asy
 
 // GET /leads/:id/audit
 router.get('/:leadId/audit', requirePermission('lead:read'), asyncHandler(async (req, res) => {
+  // The same two checks /timeline makes. Without them this endpoint was open
+  // to any colleague with lead:read while /timeline for the same lead was
+  // closed -- and audit entries carry a diff of the values that changed, so it
+  // showed more than the timeline it was gated beside.
+  const lead = get('SELECT owner_id FROM leads WHERE id = ? AND organization_id = ?', [req.params.leadId, req.auth.organizationId]);
+  if (!lead) throw notFound('Lead');
+  assertRecordAccess(req, lead.owner_id);
   const entries = audit.list({
     organizationId: req.auth.organizationId, entityType: 'lead', entityId: req.params.leadId, limit: 100,
   });

@@ -121,6 +121,36 @@ export function parsePagination(query, { defaultLimit = 50, maxLimit = 200 } = {
   return { limit, offset };
 }
 
+/**
+ * A query parameter that ends up in arithmetic, a Date, or a SQL bound.
+ *
+ * `Number('1e400')` is `Infinity`, and neither Date nor SQLite can represent
+ * it: `new Date(x).toISOString()` throws "Invalid time value" and an Infinity
+ * bound in `LIMIT ?` fails as SQLITE_MISMATCH. Both reached users as a 500
+ * from an ordinary query string -- `?limit=1e400`, `?days=1e400`,
+ * `?duration=1e400` -- so every such parameter goes through here.
+ *
+ * parseInt rather than Number on purpose: it stops at the first character that
+ * cannot continue an integer, so exponent and hex notation degrade to a plain
+ * number instead of becoming one bound away.
+ */
+export function boundedInt(value, fallback, { min = 1, max = 1000 } = {}) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * A numeric filter bound, where clamping would be a lie: `minValue=1e400`
+ * means "nothing qualifies", not "everything above the cap". Non-finite and
+ * unparseable input drops the filter instead of binding NaN, which silently
+ * matches no rows.
+ */
+export function finiteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 /** Whitelist-based sort clause builder. Prevents SQL injection via `sort`. */
 export function parseSort(query, allowed, fallback) {
   const raw = String(query.sort || '').trim();

@@ -5,6 +5,7 @@ import { COACHING_DIMENSIONS } from '../lib/constants.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, ownerScopeClause, assertRecordAccess, visibleUserIds } from '../middleware/auth.js';
 import { notFound } from '../lib/errors.js';
+import { boundedInt, finiteNumber } from '../lib/validate.js';
 
 const router = Router();
 
@@ -127,11 +128,11 @@ router.get('/calls', requirePermission('coaching:read'), asyncHandler(async (req
   }
   if (req.query.maxScore) {
     filters.push(`json_extract(a.scorecard, '$.overall') <= ?`);
-    params.push(Number(req.query.maxScore));
+    params.push(finiteNumber(req.query.maxScore));
   }
   if (req.query.dimension && req.query.dimensionBelow) {
     filters.push(`json_extract(a.scorecard, '$.${String(req.query.dimension).replace(/[^a-z_]/g, '')}') <= ?`);
-    params.push(Number(req.query.dimensionBelow));
+    params.push(finiteNumber(req.query.dimensionBelow));
   }
 
   const rows = all(
@@ -142,7 +143,7 @@ router.get('/calls', requirePermission('coaching:read'), asyncHandler(async (req
      LEFT JOIN users u ON u.id = c.agent_id LEFT JOIN leads l ON l.id = c.lead_id
      WHERE a.organization_id = ?${scope.sql}${filters.length ? ` AND ${filters.join(' AND ')}` : ''}
      ORDER BY json_extract(a.scorecard, '$.overall') ASC LIMIT ?`,
-    [...params, Number(req.query.limit) || 40],
+    [...params, boundedInt(req.query.limit, 40, { max: 200 })],
   );
 
   res.json({

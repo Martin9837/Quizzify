@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { all, get, parseJson } from '../db/index.js';
-import { validate, parsePagination } from '../lib/validate.js';
+import { validate, parsePagination, finiteNumber } from '../lib/validate.js';
 import { notFound } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, ownerScopeClause, assertRecordAccess, visibleUserIds } from '../middleware/auth.js';
@@ -66,7 +66,7 @@ router.get('/', requirePermission('transcript:read'), asyncHandler(async (req, r
   }
   if (req.query.minScore) {
     filters.push(`json_extract(a.scorecard, '$.overall') >= ?`);
-    params.push(Number(req.query.minScore));
+    params.push(finiteNumber(req.query.minScore));
   }
   if (req.query.since) {
     filters.push('c.started_at >= ?');

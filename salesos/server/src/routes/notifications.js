@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { validate } from '../lib/validate.js';
+import { validate, boundedInt } from '../lib/validate.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import * as notificationService from '../services/notifications/index.js';
 
@@ -7,12 +7,16 @@ const router = Router();
 
 // GET /notifications
 router.get('/', asyncHandler(async (req, res) => {
+  // limit and offset were accepted and then not echoed, so a client could not
+  // tell what page it was looking at or whether another one existed.
+  const limit = boundedInt(req.query.limit, 50, { max: 200 });
+  const offset = boundedInt(req.query.offset, 0, { min: 0, max: 100000 });
+  const unreadOnly = req.query.unreadOnly === 'true';
   res.json({
-    notifications: notificationService.listForUser(req.auth.userId, {
-      unreadOnly: req.query.unreadOnly === 'true',
-      limit: Number(req.query.limit) || 50,
-      offset: Number(req.query.offset) || 0,
-    }),
+    notifications: notificationService.listForUser(req.auth.userId, { unreadOnly, limit, offset }),
+    total: notificationService.countForUser(req.auth.userId, { unreadOnly }),
+    limit,
+    offset,
     unread: notificationService.unreadCount(req.auth.userId),
   });
 }));
