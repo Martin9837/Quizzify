@@ -286,6 +286,21 @@ export default function ConversationDetail() {
 
   const { call, transcript, analysis, suggestions, coachingDimensions, emails, tasks } = data;
 
+  if (!analysis && call.aiStatus === 'failed') {
+    return (
+      <>
+        <PageHeader title="Conversation" subtitle={`${call.contactName || 'Unknown'} · ${dateTime(call.startedAt)}`} />
+        <Card>
+          <div className="row-tight"><strong>The recording could not be processed</strong></div>
+          <p className="small secondary">
+            The call itself is logged, including its outcome and duration -- there is no transcript or
+            analysis for it. An administrator can see why under Admin &rarr; System.
+          </p>
+        </Card>
+      </>
+    );
+  }
+
   if (!analysis && ['queued', 'processing'].includes(call.aiStatus)) {
     return (
       <>

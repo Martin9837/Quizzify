@@ -25,6 +25,27 @@ import config from '../../config.js';
  * recording, and progress is visible to the agent while it runs.
  */
 
+/**
+ * What to do when the post-call pipeline runs out of attempts.
+ *
+ * All three stages set ai_status to 'processing' and only ever moved it to
+ * 'complete' or 'skipped'. Nothing wrote a terminal failure, so a recording
+ * that could not be fetched or stored left the call reading "AI is processing
+ * the recording" for ever -- and the agent had already been told
+ * `pipelineQueued: true`. 'failed' is a documented value of the column
+ * (db/schema.sql), it simply had no writer.
+ */
+function abandonAiPipeline(callId, error) {
+  const call = get('SELECT agent_id, ai_status FROM calls WHERE id = ?', [callId]);
+  if (!call) return;
+  // 'complete' wins: a later stage may have finished after an earlier one was
+  // retried, and a finished analysis must not be relabelled a failure.
+  if (call.ai_status === 'complete') return;
+  run(`UPDATE calls SET ai_status = 'failed', updated_at = ? WHERE id = ?`, [nowIso(), callId]);
+  emitToUser(call.agent_id, 'call.ai_status', { callId, status: 'failed', error: error?.message || null });
+  logger.error('post-call pipeline abandoned', { callId, error: error?.message });
+}
+
 export function registerWorkers() {
   // ---------------------------------------------------- simulator progression
   registerHandler('call.simulate_progress', async (payload) => telephony.simulateProgress(payload));
@@ -50,7 +71,7 @@ export function registerWorkers() {
     const { enqueue } = await import('./index.js');
     enqueue('call.transcribe', { callId }, { organizationId: call.organization_id, priority: 2 });
     return { key, bytes: stored.bytes, encrypted: stored.encrypted };
-  });
+  }, { onGiveUp: ({ callId }, error) => abandonAiPipeline(callId, error) });
 
   // ---------------------------------------------------------- transcription ---
   registerHandler('call.transcribe', async ({ callId }) => {
@@ -86,7 +107,7 @@ export function registerWorkers() {
       run(`UPDATE calls SET ai_status = 'complete' WHERE id = ?`, [callId]);
     }
     return { transcriptId: transcript.id, segments: parseJson(transcript.segments, []).length };
-  });
+  }, { onGiveUp: ({ callId }, error) => abandonAiPipeline(callId, error) });
 
   // ---------------------------------------------------------------- analysis --
   registerHandler('call.analyse', async ({ callId, transcriptId }) => {
@@ -182,7 +203,7 @@ export function registerWorkers() {
       autoApplied: suggestions.autoApplied,
       followUpProposals: followUps.proposals.length,
     };
-  });
+  }, { onGiveUp: ({ callId }, error) => abandonAiPipeline(callId, error) });
 
   // ------------------------------------------------------- missed call task ---
   registerHandler('task.create_from_missed_call', async ({ callId }) => {

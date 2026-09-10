@@ -568,6 +568,10 @@ export default function LeadDetail() {
                           </Link>
                         ) : call.aiStatus === 'processing' || call.aiStatus === 'queued' ? (
                           <span className="row-tight xs muted"><Spinner /> AI processing…</span>
+                        ) : call.aiStatus === 'failed' ? (
+                          <span className="xs danger" title="The recording could not be processed. The call itself is logged.">
+                            Recording could not be processed
+                          </span>
                         ) : (
                           <span className="xs muted">No transcript for this call</span>
                         )}

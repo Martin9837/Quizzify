@@ -368,13 +368,43 @@ export function updateLead({ organizationId, leadId, patch, actorId, source = 'u
 export function archiveLead({ organizationId, leadId, actorId }) {
   const lead = get('SELECT * FROM leads WHERE id = ? AND organization_id = ?', [leadId, organizationId]);
   if (!lead) throw notFound('Lead');
+
+  // The lead's open deals close with it, as lost, saying why.
+  //
+  // Archiving used to touch the lead alone, which left its deals in the live
+  // forecast for a contact who was no longer in the lead list and could not be
+  // opened -- inflating openValue, weightedForecast and the company's pipeline
+  // with a deal nobody could reach, let alone close. Deals have no archived
+  // state of their own and every aggregate keys off `stage`, so the honest
+  // resting place for an opportunity whose contact is gone is lost, with a
+  // reason recorded rather than left blank.
+  //
+  // Closed deals are untouched: archiving a customer must not erase the
+  // revenue they brought in. Through updateDeal so each one gets its stage
+  // history, its activity entry and the deal.lost webhook, exactly as it would
+  // if someone had closed it by hand.
+  const open = all(
+    `SELECT id FROM deals WHERE lead_id = ? AND organization_id = ? AND stage NOT IN ('won','lost')`,
+    [leadId, organizationId],
+  );
+  for (const deal of open) {
+    updateDeal({
+      organizationId,
+      dealId: deal.id,
+      patch: { stage: 'lost', lostReason: 'Lead archived' },
+      actorId,
+    });
+  }
+
   run('UPDATE leads SET archived_at = ?, updated_at = ? WHERE id = ?', [nowIso(), nowIso(), leadId]);
   removeFromIndex('lead', leadId);
   audit.record({
     organizationId, actorId, action: 'lead.archive', entityType: 'lead', entityId: leadId,
-    before: { archived_at: null }, after: { archived_at: nowIso() }, source: 'ui',
+    before: { archived_at: null },
+    after: { archived_at: nowIso(), deals_closed: open.length },
+    source: 'ui',
   });
-  return true;
+  return { archived: true, dealsClosed: open.length };
 }
 
 // ------------------------------------------------------------------ deals ----

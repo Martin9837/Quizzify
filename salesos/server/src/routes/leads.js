@@ -248,14 +248,16 @@ router.post('/bulk', requirePermission('lead:write'), asyncHandler(async (req, r
 
   if (body.action === 'archive') {
     let archived = 0;
+    let dealsClosed = 0;
     for (const leadId of body.leadIds) {
       const lead = get('SELECT owner_id FROM leads WHERE id = ? AND organization_id = ?', [leadId, req.auth.organizationId]);
       if (!lead) continue;
       assertRecordAccess(req, lead.owner_id);
-      crm.archiveLead({ organizationId: req.auth.organizationId, leadId, actorId: req.auth.userId });
+      const result = crm.archiveLead({ organizationId: req.auth.organizationId, leadId, actorId: req.auth.userId });
       archived += 1;
+      dealsClosed += result.dealsClosed;
     }
-    return res.json({ archived });
+    return res.json({ archived, dealsClosed });
   }
 
   if (body.action === 'tag' || body.action === 'untag') {
@@ -377,8 +379,10 @@ router.delete('/:leadId', requirePermission('lead:delete'), asyncHandler(async (
   const existing = get('SELECT owner_id FROM leads WHERE id = ? AND organization_id = ?', [req.params.leadId, req.auth.organizationId]);
   if (!existing) throw notFound('Lead');
   assertRecordAccess(req, existing.owner_id);
-  crm.archiveLead({ organizationId: req.auth.organizationId, leadId: req.params.leadId, actorId: req.auth.userId });
-  res.json({ ok: true });
+  // The count is reported, not swallowed: archiving closes the lead's open
+  // deals as lost, and the caller should be able to say so.
+  const result = crm.archiveLead({ organizationId: req.auth.organizationId, leadId: req.params.leadId, actorId: req.auth.userId });
+  res.json({ ok: true, dealsClosed: result.dealsClosed });
 }));
 
 // GET /leads/:id/timeline

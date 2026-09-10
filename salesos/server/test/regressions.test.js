@@ -302,5 +302,130 @@ describe('the last administrator', () => {
     const after = await owner.api.get('/admin/users');
     assert.equal(after.status, 200);
     assert.equal(after.body.users.find((user) => user.id === owner.user.id).role, 'super_admin');
+
+    // Put the others back. Leaving them suspended made every later test in
+    // this file fail with "This account is not active", which points at the
+    // wrong test entirely.
+    for (const user of others) {
+      const { status } = await owner.api.patch(`/admin/users/${user.id}`, { status: 'active' });
+      assert.equal(status, 200, `could not restore ${user.email}: ${status}`);
+    }
+  });
+});
+
+describe('archiving a lead that still has a deal', () => {
+  it('closes the deal instead of leaving it in the forecast', async () => {
+    // Archiving touched the lead alone. Its open deals stayed in openValue,
+    // weightedForecast and the company's pipeline for a contact who was no
+    // longer in the lead list and could not be opened -- and there is no
+    // DELETE /deals, so nothing could ever clear them.
+    const { api } = sessions.admin;
+    const lead = await api.post('/leads', {
+      firstName: 'Archived',
+      lastName: 'WithDeal',
+      companyName: 'Left The Building Ltd',
+      email: 'archived.withdeal@example.test',
+    });
+    assert.equal(lead.status, 201, JSON.stringify(lead.body));
+    const deal = await api.post('/deals', {
+      leadId: lead.body.lead.id, name: 'Deal on an archived lead', stage: 'qualified', value: 47000,
+    });
+    assert.equal(deal.status, 201, JSON.stringify(deal.body));
+
+    const before = (await api.get('/deals/pipeline')).body.totals.openValue;
+    assert.ok(before >= 47000, 'the deal should be in the open pipeline to begin with');
+
+    const archived = await api.del(`/leads/${lead.body.lead.id}`);
+    assert.equal(archived.status, 200);
+    assert.equal(archived.body.dealsClosed, 1, 'the response should say what it closed');
+
+    const after = (await api.get('/deals/pipeline')).body.totals.openValue;
+    assert.equal(after, before - 47000, 'the deal is still in the open forecast');
+
+    // Closed as lost, with the reason recorded rather than left blank, and
+    // still readable as history.
+    const closed = await api.get(`/deals/${deal.body.deal.id}`);
+    assert.equal(closed.status, 200);
+    assert.equal(closed.body.deal.stage, 'lost');
+    assert.equal(closed.body.deal.lostReason, 'Lead archived');
+    assert.ok(closed.body.deal.closedAt, 'a closed deal needs a close date');
+  });
+
+  it('leaves a deal that was already won alone', async () => {
+    // Archiving a customer must not erase the revenue they brought in.
+    const { api } = sessions.admin;
+    const lead = await api.post('/leads', {
+      firstName: 'Former',
+      lastName: 'Customer',
+      companyName: 'Paid Us Once Ltd',
+      email: 'former.customer@example.test',
+    });
+    const won = await api.post('/deals', {
+      leadId: lead.body.lead.id, name: 'Already won', stage: 'won', value: 12000,
+    });
+    assert.equal(won.status, 201);
+
+    const archived = await api.del(`/leads/${lead.body.lead.id}`);
+    assert.equal(archived.status, 200);
+    assert.equal(archived.body.dealsClosed, 0, 'a won deal is not an open deal');
+
+    const after = await api.get(`/deals/${won.body.deal.id}`);
+    assert.equal(after.body.deal.stage, 'won', 'archiving the lead changed a won deal');
+  });
+});
+
+describe('a post-call pipeline that gives up', () => {
+  it('records a terminal state instead of processing for ever', async () => {
+    // Every stage set ai_status to 'processing' and only ever moved it on to
+    // 'complete' or 'skipped'. A recording that could not be fetched or stored
+    // left the call reading "AI is processing the recording" indefinitely, and
+    // the agent had already been told pipelineQueued: true. The failure was
+    // visible only under /admin/system, which needs audit:read. 'failed' was
+    // already a documented value of the column with nothing to write it.
+    //
+    // This drives the real call.process_recording handler, not a stand-in, so
+    // it fails if the give-up hook is ever detached from it.
+    const { enqueue, drain } = await import('../src/services/queue/index.js');
+    const { get, run, all } = await import('../src/db/index.js');
+    const { api } = sessions.admin;
+
+    const lead = await api.post('/leads', {
+      firstName: 'Pipeline',
+      lastName: 'Failure',
+      companyName: 'Broken Bucket Ltd',
+      phone: '+15550000300',
+      consentRecording: 'granted',
+    });
+    assert.equal(lead.status, 201, JSON.stringify(lead.body));
+    const placed = await api.post('/calls', { leadId: lead.body.lead.id });
+    assert.equal(placed.status, 201, JSON.stringify(placed.body));
+    const callId = placed.body.call.id;
+
+    // A provider name nothing answers to, which is how this failed in
+    // practice: the handler throws before it can store anything, three times.
+    run(`UPDATE calls SET provider = 'gone', ai_status = 'processing', updated_at = ? WHERE id = ?`,
+      [new Date().toISOString(), callId]);
+
+    enqueue('call.process_recording', { callId }, { maxAttempts: 2 });
+    // drain() stops at the retry backoff, so the wait is skipped rather than
+    // slept through -- otherwise the last attempt never runs and the give-up
+    // hook is never reached.
+    for (let i = 0; i < 4; i += 1) {
+      await drain();
+      run(`UPDATE jobs SET run_after = ? WHERE status = 'pending' AND type = 'call.process_recording'`,
+        [new Date().toISOString()]);
+    }
+    await drain();
+
+    const job = all(`SELECT status, attempts, last_error FROM jobs WHERE type = 'call.process_recording' ORDER BY created_at DESC LIMIT 1`)[0];
+    assert.equal(job.status, 'failed', `the job should have been given up on, was ${job.status}`);
+
+    assert.equal(get('SELECT ai_status FROM calls WHERE id = ?', [callId]).ai_status, 'failed',
+      'the call is still reported as processing after the queue gave up');
+
+    // The call itself survives as a logged call -- only the AI side failed.
+    const after = await api.get(`/calls/${callId}`);
+    assert.equal(after.status, 200);
+    assert.equal(after.body.call.aiStatus, 'failed');
   });
 });

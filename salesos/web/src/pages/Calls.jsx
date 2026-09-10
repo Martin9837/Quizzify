@@ -159,6 +159,12 @@ export default function Calls() {
           return <span className="row-tight xs muted"><Spinner /> processing</span>;
         }
         if (call.aiStatus === 'skipped') return <span className="xs muted" title="Too short or not recorded">skipped</span>;
+        // 'failed' used to fall through to '--', which is what a call with no
+        // recording at all shows -- so a pipeline that gave up looked the same
+        // as one that never ran.
+        if (call.aiStatus === 'failed') {
+          return <span className="xs danger" title="The recording could not be processed. The call itself is logged.">failed</span>;
+        }
         return <span className="xs muted">--</span>;
       },
     },

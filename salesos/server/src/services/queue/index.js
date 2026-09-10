@@ -20,8 +20,17 @@ let running = 0;
 let timer = null;
 let stopped = false;
 
-export function registerHandler(type, handler) {
-  handlers.set(type, handler);
+/**
+ * `onGiveUp` runs when a job has used its last attempt.
+ *
+ * The queue has no business knowing what a call is, but something has to
+ * close the loop: a recording job that exhausted its three attempts left the
+ * call reading "AI is processing the recording" on screen for ever, because
+ * nothing ever wrote a terminal state. The failure was visible only in
+ * /admin/system, which needs audit:read.
+ */
+export function registerHandler(type, handler, { onGiveUp = null } = {}) {
+  handlers.set(type, { handler, onGiveUp });
 }
 
 export function registeredTypes() {
@@ -116,7 +125,8 @@ export function reclaimAbandoned() {
 }
 
 async function runJob(job) {
-  const handler = handlers.get(job.type);
+  const registration = handlers.get(job.type);
+  const handler = registration?.handler;
   const started = Date.now();
   if (!handler) {
     run(`UPDATE jobs SET status = 'dead', last_error = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
@@ -142,6 +152,13 @@ async function runJob(job) {
       run(`UPDATE jobs SET status = 'failed', last_error = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
         [error.message, nowIso(), nowIso(), job.id]);
       logger.error('job failed permanently', { type: job.type, jobId: job.id, error: error.message });
+      // In its own try/catch: a hook that throws must not stop the queue, and
+      // the job is already recorded as failed by this point either way.
+      try {
+        await registration?.onGiveUp?.(payload, error, job);
+      } catch (hookError) {
+        logger.error('give-up hook failed', { type: job.type, jobId: job.id, error: hookError.message });
+      }
     } else {
       const delay = BACKOFF_SECONDS[Math.min(job.attempts - 1, BACKOFF_SECONDS.length - 1)];
       run(`UPDATE jobs SET status = 'pending', last_error = ?, run_after = ?, locked_at = NULL, locked_by = NULL, updated_at = ? WHERE id = ?`,
