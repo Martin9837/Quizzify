@@ -667,10 +667,10 @@ export default function LeadDetail() {
                         <span className="xs muted row-tight wrap">
                           <Badge tone={task.priority === 'urgent' ? 'danger' : 'outline'}>{task.priority}</Badge>
                           {task.source === 'ai' && <Badge tone="accent">AI</Badge>}
-                          <span>{task.due_at ? relative(task.due_at) : 'no due date'}</span>
-                          {task.assignee_name && <span>· {task.assignee_name}</span>}
+                          <span>{task.dueAt ? relative(task.dueAt) : 'no due date'}</span>
+                          {task.assigneeName && <span>· {task.assigneeName}</span>}
                         </span>
-                        {task.ai_reason && <span className="xs secondary">{task.ai_reason}</span>}
+                        {task.aiReason && <span className="xs secondary">{task.aiReason}</span>}
                       </div>
                     </li>
                   ))}
@@ -689,11 +689,11 @@ export default function LeadDetail() {
                         <span className="small strong truncate">{email.subject}</span>
                         <span className="xs muted row-tight wrap">
                           <Badge tone={email.status === 'sent' ? 'success' : email.status === 'failed' ? 'danger' : 'outline'}>{email.status}</Badge>
-                          {email.generated_by_ai ? <Badge tone="accent">AI drafted{email.edited_by_human ? ', edited' : ''}</Badge> : null}
+                          {email.generatedByAi ? <Badge tone="accent">AI drafted{email.editedByHuman ? ', edited' : ''}</Badge> : null}
                           {email.template && <span>{titleCase(email.template)}</span>}
                         </span>
                       </div>
-                      <span className="xs muted nowrap">{relative(email.sent_at || email.created_at)}</span>
+                      <span className="xs muted nowrap">{relative(email.sentAt || email.createdAt)}</span>
                     </div>
                   ))}
                 </div>
@@ -713,11 +713,11 @@ export default function LeadDetail() {
                     <div key={note.id} className="card" style={{ padding: 'var(--space-3)', gap: 4 }}>
                       <div className="between">
                         <span className="row-tight small">
-                          <Avatar name={note.author_name} size="sm" />
-                          {note.author_name || 'Unknown'}
+                          <Avatar name={note.authorName} size="sm" />
+                          {note.authorName || 'Unknown'}
                           {note.pinned ? <Badge tone="warning">pinned</Badge> : null}
                         </span>
-                        <span className="xs muted">{relative(note.created_at)}</span>
+                        <span className="xs muted">{relative(note.createdAt)}</span>
                       </div>
                       <p className="small" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{note.body}</p>
                     </div>
@@ -810,7 +810,7 @@ export default function LeadDetail() {
                   <div key={meeting.id} className="between small">
                     <div className="col-tight" style={{ gap: 0, minWidth: 0 }}>
                       <span className="truncate strong">{meeting.title}</span>
-                      <span className="xs muted">{dateTime(meeting.starts_at)}</span>
+                      <span className="xs muted">{dateTime(meeting.startsAt)}</span>
                     </div>
                     <Badge tone={meeting.status === 'held' ? 'success' : meeting.status === 'no_show' ? 'danger' : 'outline'}>
                       {titleCase(meeting.status)}

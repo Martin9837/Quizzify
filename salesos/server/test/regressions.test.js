@@ -10,8 +10,11 @@ import { start, stop, login, ACCOUNTS } from './helpers.js';
 after(stop);
 
 const sessions = {};
+// Captured for the few tests that need to make a request the api helper cannot
+// -- an x-api-key call carries no bearer token.
+let base;
 before(async () => {
-  await start();
+  ({ baseUrl: base } = await start());
   for (const [role, email] of Object.entries(ACCOUNTS)) sessions[role] = await login(email);
 });
 
@@ -427,5 +430,191 @@ describe('a post-call pipeline that gives up', () => {
     const after = await api.get(`/calls/${callId}`);
     assert.equal(after.status, 200);
     assert.equal(after.body.call.aiStatus, 'failed');
+  });
+});
+
+describe('reprocessing a call that was never eligible', () => {
+  it('refuses a call whose contact denied recording', async () => {
+    // POST /conversations/:id/process checked only that the call existed, so
+    // it ran the pipeline on calls endCall had correctly skipped. Because the
+    // local transcriber synthesises dialogue from CRM context rather than from
+    // audio, that produced a transcript of a conversation that never happened,
+    // an analysis quoting what the prospect supposedly said, and CRM
+    // suggestions raised against a real lead.
+    // Its own lead. Denying consent writes the refusal back onto the lead, so
+    // a test that borrows a shared one poisons whatever runs next -- and
+    // ?limit=1 sorts by updated_at, which the seed writes in a single pass.
+    const { api, user } = sessions.agent;
+    // Created by the admin and owned by the agent: assignment picks the least
+    // loaded agent, which is not necessarily the one placing the call, and an
+    // agent cannot call a lead belonging to a colleague.
+    const lead = (await sessions.admin.api.post('/leads', {
+      firstName: 'Consent', lastName: 'Refused', companyName: 'No Recording Ltd',
+      phone: '+15550000410', email: 'consent.refused@example.test', ownerId: user.id,
+    })).body.lead;
+    assert.equal(lead.ownerId, user.id, 'the lead should belong to the agent placing the call');
+    const placed = await api.post('/calls', { leadId: lead.id, recordingRequested: true });
+    assert.equal(placed.status, 201, JSON.stringify(placed.body));
+    const callId = placed.body.call.id;
+
+    const denied = await api.post(`/calls/${callId}/consent`, { granted: false, method: 'verbal' });
+    assert.equal(denied.status, 200, JSON.stringify(denied.body));
+    await api.post(`/calls/${callId}/end`, { outcome: 'not_interested' });
+
+    const attempt = await api.post(`/conversations/${callId}/process`, {});
+    assert.equal(attempt.status, 400, `reprocessing a consent-denied call returned ${attempt.status}`);
+    assert.match(attempt.body.error.message, /refused to be recorded/);
+
+    // And nothing was produced for it.
+    const after = await api.get(`/conversations/${callId}`);
+    assert.equal(after.body?.transcript ?? null, null, 'a transcript was produced for a call nobody recorded');
+  });
+
+  it('refuses a call that was never answered', async () => {
+    const { api, user } = sessions.agent;
+    const lead = (await sessions.admin.api.post('/leads', {
+      firstName: 'Never', lastName: 'Answered', companyName: 'Rang Out Ltd',
+      phone: '+15550000411', email: 'never.answered@example.test', ownerId: user.id,
+    })).body.lead;
+    const placed = await api.post('/calls', { leadId: lead.id });
+    assert.equal(placed.status, 201, JSON.stringify(placed.body));
+    const callId = placed.body.call.id;
+    await api.post(`/calls/${callId}/end`, { status: 'no_answer', outcome: 'no_answer' });
+
+    const attempt = await api.post(`/conversations/${callId}/process`, {});
+    assert.equal(attempt.status, 400, `reprocessing an unanswered call returned ${attempt.status}`);
+  });
+});
+
+describe('an API key is not a blank cheque', () => {
+  it('cannot act outside the scopes it was created with', async () => {
+    // Scopes were collected, stored and shown back, and never read: a key
+    // scoped to lead:read could create administrators.
+    const { api } = sessions.admin;
+    const created = await api.post('/admin/api-keys', { name: 'scoped probe', scopes: ['lead:read'] });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const key = created.body.key || created.body.apiKey?.key || created.body.secret;
+    assert.ok(key, `the create response should return the key once: ${JSON.stringify(created.body)}`);
+
+    const withKey = (path) => fetch(`${base}/api/v1${path}`, { headers: { 'x-api-key': key } });
+
+    const allowed = await withKey('/leads?limit=1');
+    assert.equal(allowed.status, 200, 'a lead:read key must still read leads');
+
+    const refused = await withKey('/admin/users');
+    assert.equal(refused.status, 403, `an out-of-scope read returned ${refused.status}`);
+
+    const write = await fetch(`${base}/api/v1/admin/users`, {
+      method: 'POST',
+      headers: { 'x-api-key': key, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Should Not Exist', email: 'nope@example.test', role: 'agent' }),
+    });
+    assert.equal(write.status, 403, `a lead:read key created a user (${write.status})`);
+  });
+
+  it('still allows a key created with no scopes to act broadly', async () => {
+    // '*' is the default and the behaviour every existing key relies on.
+    const { api } = sessions.admin;
+    const created = await api.post('/admin/api-keys', { name: 'unscoped probe' });
+    const key = created.body.key || created.body.apiKey?.key || created.body.secret;
+    const response = await fetch(`${base}/api/v1/admin/users`, { headers: { 'x-api-key': key } });
+    assert.equal(response.status, 200, 'an unscoped key should keep working as before');
+  });
+});
+
+describe('settings that used to govern nothing', () => {
+  it('stops proposing follow-ups and serving coaching when they are switched off', async () => {
+    // Both switches sit in the admin screen beside two that are enforced, and
+    // were read by nothing: turning either off changed nothing at all.
+    const owner = sessions.owner.api;
+    const agent = sessions.agent.api;
+
+    const before = await agent.get('/coaching/overview');
+    assert.equal(before.status, 200, 'coaching should work to begin with');
+
+    const off = await owner.patch('/admin/settings', {
+      settings: { ai: { coachingEnabled: false, followUpSuggestionsEnabled: false } },
+    });
+    assert.equal(off.status, 200);
+
+    try {
+      for (const path of ['/coaching/overview', '/coaching/calls']) {
+        const { status } = await agent.get(path);
+        assert.equal(status, 403, `${path} answered ${status} with coaching disabled`);
+      }
+      const call = (await agent.get('/calls?analysed=true&limit=1')).body.calls[0];
+      if (call) {
+        const proposed = await agent.post('/ai/follow-ups/propose', { callId: call.id });
+        assert.equal(proposed.status, 403,
+          `follow-ups were proposed with the switch off (${proposed.status})`);
+      }
+    } finally {
+      await owner.patch('/admin/settings', {
+        settings: { ai: { coachingEnabled: true, followUpSuggestionsEnabled: true } },
+      });
+    }
+
+    const after = await agent.get('/coaching/overview');
+    assert.equal(after.status, 200, 'coaching should work again once re-enabled');
+  });
+
+  it('reports the retention window that is actually enforced', async () => {
+    // Two keys described one thing: the Call settings screen wrote
+    // recording.retentionDays, which nothing read, while the sweep enforced
+    // dataRetention.recordingDays. Lowering the first changed nothing.
+    const owner = sessions.owner.api;
+    const set = await owner.patch('/admin/settings', { settings: { dataRetention: { recordingDays: 45 } } });
+    assert.equal(set.status, 200);
+
+    const lead = (await sessions.agent.api.get('/leads?limit=1')).body.leads[0];
+    const policy = await sessions.agent.api.get(`/calls/consent-policy?leadId=${lead.id}`);
+    assert.equal(policy.status, 200);
+    assert.equal(policy.body.recordingRetentionDays, 45,
+      'the consent policy reported a retention window the sweep does not use');
+
+    await owner.patch('/admin/settings', { settings: { dataRetention: { recordingDays: 365 } } });
+  });
+
+  it('does not invent a meeting room the product cannot host', async () => {
+    // Every meeting was given a conference_url of `${publicUrl}/meet/<room>`,
+    // a route nothing serves -- so "Join meeting" opened the SPA's own
+    // not-found page, and the same dead link went to the contact in the
+    // invitation email.
+    const { api } = sessions.admin;
+    const lead = (await api.get('/leads?limit=1')).body.leads[0];
+    const created = await api.post('/meetings', {
+      leadId: lead.id,
+      title: 'Meeting with no conference link',
+      startsAt: new Date(Date.now() + 86400000).toISOString(),
+      durationMinutes: 30,
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.meeting.conferenceUrl ?? null, null,
+      `a conference URL was invented: ${created.body.meeting.conferenceUrl}`);
+
+    // One the organiser supplies is kept.
+    const withUrl = await api.post('/meetings', {
+      leadId: lead.id,
+      title: 'Meeting with a real link',
+      startsAt: new Date(Date.now() + 90000000).toISOString(),
+      durationMinutes: 30,
+      conferenceUrl: 'https://meet.example.com/abc-defg-hij',
+    });
+    assert.equal(withUrl.body.meeting.conferenceUrl, 'https://meet.example.com/abc-defg-hij');
+  });
+
+  it('queues the daily digest once a day, which nothing ever did', async () => {
+    const { runScheduler } = await import('../src/services/automation/index.js');
+    const { all } = await import('../src/db/index.js');
+    const countDigests = () => all(`SELECT id FROM jobs WHERE type = 'digest.daily'`).length;
+
+    const before = countDigests();
+    runScheduler();
+    const after = countDigests();
+    assert.equal(after, before + 1, 'the scheduler did not queue a daily digest');
+
+    // Twice in the same local day is once.
+    runScheduler();
+    assert.equal(countDigests(), after, 'the scheduler queued a second digest on the same day');
   });
 });

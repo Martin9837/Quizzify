@@ -160,6 +160,33 @@ export const api = {
     clearTokens();
   },
 
+  /**
+   * Open an authenticated binary response -- a call recording -- in a new tab.
+   *
+   * The recording endpoint sits behind `authenticate`, and this app keeps its
+   * token in localStorage rather than a cookie, so a plain <a href> to it
+   * arrived with no credentials and opened a tab containing the raw 401 JSON.
+   * Fetching it here sends the header and hands the browser a blob instead,
+   * which also keeps the token out of the URL, the history and any log.
+   */
+  async openInTab(path, query) {
+    const response = await request('GET', path, { query, raw: true });
+    const href = URL.createObjectURL(await response.blob());
+    const opened = window.open(href, '_blank', 'noopener');
+    if (!opened) {
+      // Popup blocked: fall back to downloading it rather than failing silently.
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = path.split('/').filter(Boolean).slice(-2).join('-');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+    // Long enough for the new tab to have read it; revoking immediately can
+    // race the load.
+    setTimeout(() => URL.revokeObjectURL(href), 60_000);
+  },
+
   /** Download a report as a file without leaving the page. */
   async download(path, query, filename) {
     const response = await request('GET', path, { query, raw: true });

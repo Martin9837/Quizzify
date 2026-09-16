@@ -298,6 +298,12 @@ router.post('/email/generate', requirePermission('email:send'), asyncHandler(asy
 // ------------------------------------------------------- follow-up proposals --
 // POST /ai/follow-ups/propose
 router.post('/follow-ups/propose', requirePermission('task:write'), asyncHandler(async (req, res) => {
+  // `ai.followUpSuggestionsEnabled` was a switch in the admin screen that
+  // nothing consulted: turning follow-up suggestions off left them being
+  // proposed exactly as before.
+  if (orgSettings(req.auth.organizationId).ai?.followUpSuggestionsEnabled === false) {
+    throw forbidden('Follow-up suggestions are disabled for this organisation');
+  }
   const body = validate(req.body, { callId: { type: 'string', required: true, maxLength: 40 } });
   const call = get('SELECT * FROM calls WHERE id = ? AND organization_id = ?', [body.callId, req.auth.organizationId]);
   if (!call) throw notFound('Call');

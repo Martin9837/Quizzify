@@ -728,13 +728,21 @@ function CallSettings() {
               { value: 'disabled', label: 'Recording disabled' },
             ]}
           />
-          <TextField
-            label="Recording retention (days)"
-            type="number"
-            min="1"
-            defaultValue={recording.retentionDays ?? 365}
-            onBlur={(event) => patch({ retentionDays: Number(event.target.value) })}
-            hint="Recordings are permanently deleted from object storage after this"
+          {/* The retention window lives on the Security tab, under Data
+              retention, which is the value the scheduled sweep actually
+              enforces and is a super-admin decision. A second field here wrote
+              recording.retentionDays, which nothing read -- so lowering it
+              looked like it had taken effect and changed nothing. */}
+          <KeyValue items={[{
+            label: 'Recording retention',
+            value: (
+              <span>
+                {settings?.dataRetention?.recordingDays ?? 365} days
+                {' · '}
+                <NavLink to="/admin/security">change under Data retention</NavLink>
+              </span>
+            ),
+          }]}
           />
         </div>
         <div className="grid grid-2">

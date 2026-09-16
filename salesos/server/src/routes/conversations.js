@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { all, get, parseJson } from '../db/index.js';
 import { validate, parsePagination, finiteNumber } from '../lib/validate.js';
-import { notFound } from '../lib/errors.js';
+import { notFound, badRequest } from '../lib/errors.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, ownerScopeClause, assertRecordAccess, visibleUserIds } from '../middleware/auth.js';
 import { COACHING_DIMENSIONS } from '../lib/constants.js';
 import * as extraction from '../services/ai/extraction.js';
 import * as ai from '../services/ai/index.js';
+import * as telephony from '../services/telephony/index.js';
 import { enqueue } from '../services/queue/index.js';
 import { humanDuration } from '../lib/time.js';
 
@@ -228,6 +229,21 @@ router.post('/:callId/process', requirePermission('ai:analyze'), asyncHandler(as
   const call = get('SELECT * FROM calls WHERE id = ? AND organization_id = ?', [req.params.callId, req.auth.organizationId]);
   if (!call) throw notFound('Call');
   assertRecordAccess(req, call.agent_id);
+
+  // The same test ending a call applies. This route used to check only that
+  // the call existed, so it would run the pipeline on a call whose contact had
+  // refused recording, or one that was never answered -- and because the local
+  // transcriber synthesises dialogue from CRM context rather than from audio,
+  // it produced a transcript of a conversation that never happened, an
+  // analysis quoting what the prospect supposedly said, and CRM suggestions
+  // raised against a real lead.
+  const { eligible, reason } = telephony.pipelineEligibility(call);
+  if (!eligible) {
+    throw badRequest(reason === 'consent_denied'
+      ? 'This contact refused to be recorded, so this call cannot be processed.'
+      : `This call cannot be processed: ${reason.replace(/_/g, ' ')}.`);
+  }
+
   const existingTranscript = get('SELECT id FROM transcripts WHERE call_id = ? LIMIT 1', [call.id]);
   const jobType = existingTranscript ? 'call.analyse' : call.recording_object_key ? 'call.transcribe' : 'call.process_recording';
   const jobId = enqueue(jobType, { callId: call.id, transcriptId: existingTranscript?.id },

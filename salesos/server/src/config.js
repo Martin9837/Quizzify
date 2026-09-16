@@ -153,6 +153,10 @@ export const config = {
       user: env.SMTP_USER,
       pass: env.SMTP_PASS,
     },
+    // Shared secret for the provider's event callbacks (opens, replies,
+    // bounces). Without it that endpoint is refused rather than left open --
+    // see routes/webhooksIn.js.
+    webhookSecret: env.EMAIL_WEBHOOK_SECRET,
   },
 
   queue: {

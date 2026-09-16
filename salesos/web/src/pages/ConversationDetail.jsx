@@ -271,6 +271,15 @@ export default function ConversationDetail() {
   const [showEmail, setShowEmail] = useState(false);
   const [reanalysing, setReanalysing] = useState(false);
 
+  // The endpoint needs the bearer token, which a plain link cannot carry.
+  const playRecording = async (id) => {
+    try {
+      await api.openInTab(`/calls/${id}/recording`);
+    } catch (error) {
+      toast.error(error.message || 'The recording could not be opened');
+    }
+  };
+
   const { data, loading, error, refetch } = useApi(`/conversations/${callId}`);
 
   useRealtimeEvent('analysis.ready', (payload) => {
@@ -360,9 +369,9 @@ export default function ConversationDetail() {
               <IconTask /> Follow-up tasks
             </button>
             {call.hasRecording && can('call:recording:listen') && (
-              <a className="btn" href={`/api/v1/calls/${callId}/recording`} target="_blank" rel="noreferrer">
+              <button type="button" className="btn" onClick={() => playRecording(callId)}>
                 <IconPlay /> Recording
-              </a>
+              </button>
             )}
             {can('ai:analyze') && (
               <button type="button" className="btn ghost icon" onClick={reanalyse} disabled={reanalysing} title="Re-run analysis">

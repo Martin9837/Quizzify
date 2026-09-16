@@ -94,7 +94,12 @@ router.post('/', requirePermission('meeting:write'), asyncHandler(async (req, re
     description: data.description || null,
     type: data.type,
     location: data.location || null,
-    conference_url: data.conferenceUrl || `${config.publicUrl}/meet/${id('room')}`,
+    // Only what the organiser actually supplied. This used to mint
+    // `${publicUrl}/meet/<room>` for every meeting -- a route the product does
+    // not serve, so the SPA answered it with its own Not-found page. The
+    // "Join meeting" button led there, and worse, the link went out to the
+    // contact in the invitation email.
+    conference_url: data.conferenceUrl || null,
     starts_at: data.startsAt,
     ends_at: endsAt,
     timezone: data.timezone,

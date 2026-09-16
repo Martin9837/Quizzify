@@ -90,7 +90,12 @@ router.get('/consent-policy', requirePermission('call:place'), asyncHandler(asyn
     policy,
     consentOnFile: lead?.consent_recording === 'granted',
     doNotCall: Boolean(lead?.do_not_call),
-    recordingRetentionDays: settings.recording?.retentionDays ?? null,
+    // dataRetention.recordingDays is the one the sweep enforces
+    // (services/automation). recording.retentionDays was a second key that
+    // only ever echoed back here, so an admin who lowered it on the Call
+    // settings screen changed nothing while the screen told them recordings
+    // would be deleted after it.
+    recordingRetentionDays: settings.dataRetention?.recordingDays ?? null,
   });
 }));
 

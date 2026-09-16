@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { get, run } from '../db/index.js';
 import { nowIso } from '../lib/time.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, notFound, unauthorized } from '../lib/errors.js';
 import * as telephony from '../services/telephony/index.js';
 import { enqueue } from '../services/queue/index.js';
 import { createHmac } from 'node:crypto';
@@ -36,6 +36,20 @@ function verifyTwilioSignature(req) {
   const payload = url + Object.keys(params).sort().map((key) => `${key}${params[key]}`).join('');
   const expected = createHmac('sha1', token).update(payload, 'utf8').digest('base64');
   return safeEqual(expected, provided);
+}
+
+/**
+ * The email provider's event callback, authenticated by a shared secret in
+ * `x-salesos-signature`. Unlike the telephony routes there is no
+ * provider-specific signature to re-derive, so the secret is compared
+ * directly, in constant time.
+ */
+function verifyEmailWebhookSecret(req) {
+  const secret = config.email.webhookSecret;
+  if (!secret) return false;
+  const provided = req.get('x-salesos-signature');
+  if (!provided) return false;
+  return safeEqual(secret, provided);
 }
 
 // POST /webhooks/telephony/status
@@ -112,6 +126,17 @@ router.post('/telephony/inbound', asyncHandler(async (req, res) => {
 
 // POST /webhooks/email/events  -- opens, replies, bounces
 router.post('/email/events', asyncHandler(async (req, res) => {
+  // This file's own note says every route here validates a provider signature
+  // in place of a JWT. This one validated nothing, so anyone who could reach
+  // the server could mark any email opened, replied or failed by guessing a
+  // provider message id -- and those fields feed the Inbox's engagement
+  // metrics and the follow-up automations that read them.
+  //
+  // Fails closed: with no secret configured the endpoint is refused rather
+  // than left open, because an unauthenticated writer is worse than an
+  // unavailable one. The event payload is not a real signature scheme -- ESPs
+  // differ -- so it is a shared secret compared in constant time.
+  if (!verifyEmailWebhookSecret(req)) throw unauthorized('Invalid or missing email webhook secret');
   const { messageId, event } = req.body || {};
   if (!messageId || !event) throw badRequest('messageId and event are required');
   const email = get('SELECT * FROM emails WHERE provider_message_id = ?', [messageId]);

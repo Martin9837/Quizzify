@@ -9,6 +9,7 @@ import * as webhooks from '../webhooks.js';
 import { orgSettings } from '../org.js';
 import { indexRecord, removeFromIndex } from '../search/index.js';
 import { deleteObject } from '../storage/index.js';
+import { enqueue } from '../queue/index.js';
 
 /**
  * Automation layer: lead assignment, AI-proposed follow-ups, reminders, and the
@@ -219,18 +220,76 @@ export function createTask({
  * "already handled" column so running twice never double-notifies.
  */
 export function runScheduler() {
-  const results = { taskReminders: 0, meetingReminders: 0, overdueAlerts: 0, staleLeadAlerts: 0, retentionDeletions: 0 };
-  const organizations = all('SELECT id FROM organizations');
+  const results = {
+    taskReminders: 0, meetingReminders: 0, overdueAlerts: 0, staleLeadAlerts: 0,
+    dailyDigests: 0, retentionDeletions: 0,
+  };
+  const organizations = all('SELECT id, timezone FROM organizations');
 
   for (const org of organizations) {
     results.taskReminders += sendTaskReminders(org.id);
     results.meetingReminders += sendMeetingReminders(org.id);
     results.overdueAlerts += sendOverdueDigest(org.id);
     results.staleLeadAlerts += alertOnStaleHotLeads(org.id);
+    results.dailyDigests += queueDailyDigest(org);
   }
   results.retentionDeletions = enforceRetention();
   logger.debug('scheduler pass complete', results);
   return results;
+}
+
+/**
+ * The morning digest, once per organisation per day.
+ *
+ * The handler for it has always existed and honours its own setting, and
+ * nothing anywhere enqueued it -- so the "Daily digest for agents" switch in
+ * the admin screen governed something that never ran. There is no
+ * last-sent column to key off, so the jobs table is the record: one digest per
+ * organisation per local day.
+ *
+ * Gated on the organisation's own morning rather than UTC's, because a digest
+ * titled "Your day" arriving at four in the afternoon is worse than none.
+ */
+function queueDailyDigest(org) {
+  const settings = orgSettings(org.id);
+  if (settings.notifications?.dailyDigest === false) return 0;
+
+  const { date, hour } = localDateAndHour(org.timezone);
+  if (hour < DIGEST_HOUR) return 0;
+
+  // Compared against the same local date the decision was made in, so a
+  // deployment whose UTC day rolls over mid-morning does not send twice.
+  const already = get(
+    `SELECT 1 AS n FROM jobs WHERE type = 'digest.daily' AND organization_id = ?
+       AND substr(json_extract(payload, '$.localDate'), 1, 10) = ?`,
+    [org.id, date],
+  );
+  if (already) return 0;
+
+  enqueue('digest.daily', { organizationId: org.id, localDate: date }, { organizationId: org.id, priority: 8 });
+  return 1;
+}
+
+const DIGEST_HOUR = 7;
+
+/** The calendar date and hour where the organisation is, not where the server is. */
+function localDateAndHour(timezone) {
+  const zone = timezone || 'UTC';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const value = (type) => parts.find((part) => part.type === type)?.value;
+    return {
+      date: `${value('year')}-${value('month')}-${value('day')}`,
+      // 24 at midnight in some ICU versions.
+      hour: Number(value('hour')) % 24,
+    };
+  } catch {
+    // An unrecognised timezone must not stop the sweep.
+    const now = new Date();
+    return { date: now.toISOString().slice(0, 10), hour: now.getUTCHours() };
+  }
 }
 
 function sendTaskReminders(organizationId) {

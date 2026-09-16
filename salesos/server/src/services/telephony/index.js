@@ -319,6 +319,35 @@ export function recordConsent({ organizationId, callId, granted, method = 'verba
 }
 
 // ------------------------------------------------------------- hang up ------
+/**
+ * Whether a call may have the post-call AI pipeline run against it.
+ *
+ * One function because there are two entry points -- ending a call, and
+ * POST /conversations/:id/process for a call that skipped it -- and only the
+ * first one used to test anything. The second would happily run the pipeline
+ * on a call whose contact had explicitly refused recording, or one that was
+ * never answered: the local transcriber synthesises dialogue from CRM context
+ * rather than from audio, so it produced a full transcript of a conversation
+ * that never happened, an analysis asserting what the prospect had said, and
+ * CRM suggestions raised against a real lead.
+ *
+ * Consent is checked first and by name. `recording_enabled` already implies it
+ * today, but a refusal is the one reason here that is a promise made to a
+ * person rather than a configuration detail, and it should not depend on
+ * another column staying in sync with it.
+ */
+export function pipelineEligibility(call, settings = null) {
+  const resolved = settings || orgSettings(call.organization_id);
+  if (call.recording_consent === 'denied') return { eligible: false, reason: 'consent_denied' };
+  if (!call.recording_enabled) return { eligible: false, reason: 'not_recorded' };
+  if (resolved.transcription?.enabled === false) return { eligible: false, reason: 'transcription_disabled' };
+  if (!call.answered_at) return { eligible: false, reason: 'never_answered' };
+  const minimumSeconds = resolved.transcription?.minimumCallSeconds ?? 5;
+  const seconds = Number(call.duration_seconds) || 0;
+  if (seconds < minimumSeconds) return { eligible: false, reason: `shorter_than_${minimumSeconds}s` };
+  return { eligible: true, reason: null };
+}
+
 export async function endCall({ organizationId, callId, outcome = null, notes = null, status = 'completed', actorId = null }) {
   const call = requireCall(organizationId, callId);
   if (['completed', 'missed', 'voicemail', 'failed', 'no_answer'].includes(call.status) && call.ended_at) {
@@ -405,11 +434,7 @@ export async function endCall({ organizationId, callId, outcome = null, notes = 
   });
 
   // Post-call pipeline. Recording -> transcript -> analysis -> suggestions.
-  const settings = orgSettings(organizationId);
-  const minimumSeconds = settings.transcription?.minimumCallSeconds ?? 5;
-  const eligible = Boolean(updated.recording_enabled)
-    && duration >= minimumSeconds
-    && settings.transcription?.enabled !== false;
+  const { eligible, reason: skipReason } = pipelineEligibility({ ...updated, duration_seconds: duration });
   if (eligible) {
     run(`UPDATE calls SET ai_status = 'queued' WHERE id = ?`, [callId]);
     enqueue('call.process_recording', { callId }, { organizationId, priority: 2 });
@@ -426,10 +451,9 @@ export async function endCall({ organizationId, callId, outcome = null, notes = 
     pipelineQueued: eligible,
     // Surfaced so the UI can explain a missing transcript rather than
     // leaving the agent wondering where the analysis went.
-    skipReason: eligible ? null
-      : !updated.recording_enabled ? 'not_recorded'
-        : settings.transcription?.enabled === false ? 'transcription_disabled'
-          : `shorter_than_${minimumSeconds}s`,
+    // Comes from the same test that made the decision, rather than being
+    // re-derived here and able to disagree with it.
+    skipReason,
   };
 }
 

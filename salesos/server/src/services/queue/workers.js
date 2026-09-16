@@ -9,7 +9,7 @@ import * as automation from '../automation/index.js';
 import * as notifications from '../notifications/index.js';
 import * as activityLog from '../activity.js';
 import * as webhooksService from '../webhooks.js';
-import { putObject, recordingKey } from '../storage/index.js';
+import { putObject, getObject, recordingKey } from '../storage/index.js';
 import { indexRecord } from '../search/index.js';
 import { sendEmail } from '../email/index.js';
 import { emitToUser } from '../realtime/index.js';
@@ -61,6 +61,17 @@ export function registerWorkers() {
       providerCallId: call.provider_call_id,
       durationSeconds: call.talk_seconds || call.duration_seconds,
     });
+    // The device provider has no recording to hand over -- the audio never
+    // went through the platform -- and returns null. Dereferencing it threw a
+    // TypeError that was retried three times before the pipeline was
+    // abandoned, leaving the agent a bare "failed" for something that was
+    // never going to succeed. There is nothing to store and nothing to
+    // transcribe, which is a skip.
+    if (!recording?.buffer) {
+      run(`UPDATE calls SET ai_status = 'skipped', updated_at = ? WHERE id = ?`, [nowIso(), callId]);
+      emitToUser(call.agent_id, 'call.ai_status', { callId, status: 'skipped', step: 'recording' });
+      return { skipped: `${call.provider} returned no recording` };
+    }
     const key = recordingKey(call.organization_id, callId);
     const stored = await putObject(key, recording.buffer, { contentType: recording.contentType });
 
@@ -83,7 +94,25 @@ export function registerWorkers() {
     const deal = call.deal_id ? get('SELECT * FROM deals WHERE id = ?', [call.deal_id]) : null;
     const agent = call.agent_id ? get('SELECT name FROM users WHERE id = ?', [call.agent_id]) : null;
 
-    const { transcript } = await ai.transcribeCall({ call, lead, deal, agentName: agent?.name });
+    // Read the audio back and hand it over. The pipeline stored the recording
+    // and then never loaded it again: transcribeCall takes a `recording` and
+    // nothing passed one, so with an STT provider configured the request went
+    // out with an empty body. Harmless only while the local engine, which
+    // synthesises from CRM context, is the one answering.
+    let recording = null;
+    if (call.recording_object_key) {
+      try {
+        recording = { buffer: await getObject(call.recording_object_key), contentType: 'audio/wav' };
+      } catch (error) {
+        // A missing object must not lose the call: the local engine needs no
+        // audio, and an external provider will fail loudly on its own.
+        logger.warn('could not read the recording back for transcription', {
+          callId, key: call.recording_object_key, error: error.message,
+        });
+      }
+    }
+
+    const { transcript } = await ai.transcribeCall({ call, lead, deal, agentName: agent?.name, recording });
 
     indexRecord({
       organizationId: call.organization_id,

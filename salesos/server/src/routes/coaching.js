@@ -2,12 +2,26 @@ import { Router } from 'express';
 import { all, get, parseJson } from '../db/index.js';
 import { startOfDay } from '../lib/time.js';
 import { COACHING_DIMENSIONS } from '../lib/constants.js';
+import { orgSettings } from '../services/org.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { requirePermission, ownerScopeClause, assertRecordAccess, visibleUserIds } from '../middleware/auth.js';
-import { notFound } from '../lib/errors.js';
+import { notFound, forbidden } from '../lib/errors.js';
 import { boundedInt, finiteNumber } from '../lib/validate.js';
 
 const router = Router();
+
+/**
+ * `ai.coachingEnabled` sits in the admin screen next to two toggles that are
+ * enforced, and was read by nothing: turning coaching off left every coaching
+ * screen working exactly as before. Applied to the whole router rather than
+ * per route, so a coaching endpoint added later cannot forget it.
+ */
+router.use((req, res, next) => {
+  if (orgSettings(req.auth.organizationId).ai?.coachingEnabled === false) {
+    return next(forbidden('Coaching is disabled for this organisation'));
+  }
+  return next();
+});
 
 /**
  * Call quality and coaching.

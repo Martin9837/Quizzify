@@ -85,6 +85,15 @@ export default function Calls() {
   const [showDialler, setShowDialler] = useState(false);
   const [showInbound, setShowInbound] = useState(false);
 
+  // The endpoint needs the bearer token, which a plain link cannot carry.
+  const playRecording = async (id) => {
+    try {
+      await api.openInTab(`/calls/${id}/recording`);
+    } catch (error) {
+      toast.error(error.message || 'The recording could not be opened');
+    }
+  };
+
   const query = {
     limit: 100,
     direction: tab === 'inbound' ? 'inbound' : tab === 'outbound' ? 'outbound' : undefined,
@@ -189,16 +198,15 @@ export default function Calls() {
             </button>
           )}
           {call.hasRecording && can('call:recording:listen') && (
-            <a
+            <button
+              type="button"
               className="btn sm ghost icon"
-              href={`/api/v1/calls/${call.id}/recording`}
+              onClick={() => playRecording(call.id)}
               title="Recording"
               aria-label="Open recording"
-              target="_blank"
-              rel="noreferrer"
             >
               <IconPlay size={13} />
-            </a>
+            </button>
           )}
         </div>
       ),
