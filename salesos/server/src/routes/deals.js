@@ -8,7 +8,9 @@ import { requirePermission, ownerScopeClause, assertRecordAccess, visibleUserIds
 import * as crm from '../services/crm.js';
 import * as insights from '../services/ai/insights.js';
 import * as activityService from '../services/activity.js';
+import * as audit from '../services/audit.js';
 import { nowIso } from '../lib/time.js';
+import { removeFromIndex } from '../services/search/index.js';
 
 const router = Router();
 
@@ -225,6 +227,39 @@ router.patch('/:dealId', requirePermission('deal:write'), asyncHandler(async (re
     organizationId: req.auth.organizationId, dealId: req.params.dealId, patch, actorId: req.auth.userId,
   });
   res.json({ deal });
+}));
+
+// DELETE /deals/:id
+/**
+ * `deal:delete` has been granted to managers since the permission map was
+ * written, and was handed to the client in every login response, with no route
+ * behind it -- so any UI that trusted it would render a control that 404s.
+ *
+ * A hard delete, which is what the schema already models: deal_stage_history
+ * cascades, and calls, tasks, notes, emails and meetings keep their own rows
+ * with deal_id set to NULL. Leads archive instead of deleting because they are
+ * the record of a person; a deal entered by mistake is just a mistake.
+ */
+router.delete('/:dealId', requirePermission('deal:delete'), asyncHandler(async (req, res) => {
+  const deal = get('SELECT * FROM deals WHERE id = ? AND organization_id = ?', [req.params.dealId, req.auth.organizationId]);
+  if (!deal) throw notFound('Deal');
+  assertRecordAccess(req, deal.owner_id);
+
+  run('DELETE FROM deals WHERE id = ?', [deal.id]);
+  removeFromIndex('deal', deal.id);
+  audit.recordFromRequest(req, {
+    action: 'deal.delete', entityType: 'deal', entityId: deal.id, before: deal,
+  });
+  activityService.log({
+    organizationId: req.auth.organizationId,
+    leadId: deal.lead_id,
+    actorId: req.auth.userId,
+    type: 'stage_change',
+    refId: deal.id,
+    title: `Deal deleted: ${deal.name}`,
+    metadata: { stage: deal.stage, value: deal.value },
+  });
+  res.json({ ok: true });
 }));
 
 // POST /deals/:id/move  -- drag-and-drop on the board

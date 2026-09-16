@@ -336,25 +336,15 @@ export default function Leads() {
     }
   };
 
-  const exportCsv = () => {
-    const rows = data?.leads || [];
-    const headers = ['name', 'company', 'title', 'email', 'phone', 'status', 'temperature', 'score', 'source', 'owner', 'dealValue', 'lastContacted'];
-    const csv = [
-      headers.join(','),
-      ...rows.map((lead) => [
-        lead.name, lead.companyName, lead.jobTitle, lead.email, lead.phone, lead.status,
-        lead.temperature, lead.score, lead.source, lead.ownerName, lead.dealValue, lead.lastContactedAt,
-      ].map((value) => {
-        const text = value === null || value === undefined ? '' : String(value);
-        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-      }).join(',')),
-    ].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(link.href);
+  // Through the API, which applies the same filters and scope to the whole
+  // book rather than to the page already on screen -- and which enforces
+  // lead:export, a permission this button never checked.
+  const exportCsv = async () => {
+    try {
+      await api.download('/leads/export', query, `leads-${new Date().toISOString().slice(0, 10)}.csv`);
+    } catch (error) {
+      toast.error(error.message || 'The export failed');
+    }
   };
 
   const columns = [
@@ -444,7 +434,9 @@ export default function Leads() {
             <button type="button" className={`btn ${activeFilterCount ? 'primary' : ''}`} onClick={() => setShowFilters(true)}>
               <IconFilter /> Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}
             </button>
-            <button type="button" className="btn" onClick={exportCsv}><IconDownload /> Export</button>
+            {can('lead:export') && (
+              <button type="button" className="btn" onClick={exportCsv}><IconDownload /> Export</button>
+            )}
             {can('lead:import') && <button type="button" className="btn" onClick={() => setShowImport(true)}><IconUpload /> Import</button>}
             {can('lead:write') && <button type="button" className="btn primary" onClick={() => setShowForm(true)}><IconPlus /> Add lead</button>}
           </>

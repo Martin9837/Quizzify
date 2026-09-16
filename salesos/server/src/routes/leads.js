@@ -17,19 +17,24 @@ const router = Router();
 const SORTABLE = ['created_at', 'updated_at', 'score', 'deal_value', 'last_contacted_at', 'next_follow_up_at', 'first_name', 'company_name'];
 
 // GET /leads
-router.get('/', requirePermission('lead:read'), asyncHandler(async (req, res) => {
-  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+/**
+ * The scope, filters and sort a lead listing uses, built once.
+ *
+ * Extracted so the export below cannot drift from the list above: an export
+ * that quietly applied different filters, or a different visibility scope,
+ * would be worse than no export at all.
+ */
+function leadQuery(req) {
   const order = parseSort(req.query, SORTABLE, 'updated_at DESC');
   const scope = ownerScopeClause(req, 'l.owner_id', { includeUnassigned: true });
 
   const filters = [];
   const params = [req.auth.organizationId, ...scope.params];
-  const where = () => `WHERE l.organization_id = ?${scope.sql} AND l.archived_at IS NULL${filters.length ? ` AND ${filters.join(' AND ')}` : ''}`;
-
   const addFilter = (clause, value) => {
     filters.push(clause);
     params.push(value);
   };
+
   if (req.query.status) addFilter('l.status = ?', req.query.status);
   if (req.query.temperature) addFilter('l.temperature = ?', req.query.temperature);
   if (req.query.source) addFilter('l.source = ?', req.query.source);
@@ -48,7 +53,15 @@ router.get('/', requirePermission('lead:read'), asyncHandler(async (req, res) =>
     params.push(like, like, like, like, like);
   }
 
-  const total = get(`SELECT COUNT(*) AS n FROM leads l ${where()}`, params)?.n || 0;
+  const where = `WHERE l.organization_id = ?${scope.sql} AND l.archived_at IS NULL${filters.length ? ` AND ${filters.join(' AND ')}` : ''}`;
+  return { where, params, order };
+}
+
+router.get('/', requirePermission('lead:read'), asyncHandler(async (req, res) => {
+  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+  const { where, params, order } = leadQuery(req);
+
+  const total = get(`SELECT COUNT(*) AS n FROM leads l ${where}`, params)?.n || 0;
   const rows = all(
     `SELECT l.*, u.name AS owner_name,
        (SELECT COUNT(*) FROM calls c WHERE c.lead_id = l.id) AS call_count,
@@ -57,7 +70,7 @@ router.get('/', requirePermission('lead:read'), asyncHandler(async (req, res) =>
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      LEFT JOIN deals d ON d.lead_id = l.id AND d.stage NOT IN ('won','lost')
-     ${where()}
+     ${where}
      GROUP BY l.id ORDER BY l.${order} LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
@@ -73,6 +86,60 @@ router.get('/', requirePermission('lead:read'), asyncHandler(async (req, res) =>
     limit,
     offset,
   });
+}));
+
+// GET /leads/export -- the whole filtered book as CSV
+const EXPORT_COLUMNS = [
+  ['name', (lead) => lead.name],
+  ['company', (lead) => lead.companyName],
+  ['title', (lead) => lead.jobTitle],
+  ['email', (lead) => lead.email],
+  ['phone', (lead) => lead.phone],
+  ['status', (lead) => lead.status],
+  ['temperature', (lead) => lead.temperature],
+  ['score', (lead) => lead.score],
+  ['source', (lead) => lead.source],
+  ['owner', (lead) => lead.ownerName],
+  ['dealValue', (lead) => lead.dealValue],
+  ['lastContacted', (lead) => lead.lastContactedAt],
+];
+
+const EXPORT_LIMIT = 10000;
+
+/**
+ * Exporting was done in the browser from whatever the list had already
+ * fetched. Two things followed: the Export button carried no permission check
+ * at all, so an agent who is not allowed to export the book could export it --
+ * `lead:export` is manager-and-above and was enforced nowhere -- and an
+ * organisation with 500 leads silently received a 100-row file, because that
+ * is one page.
+ */
+router.get('/export', requirePermission('lead:export'), asyncHandler(async (req, res) => {
+  const { where, params, order } = leadQuery(req);
+  const rows = all(
+    `SELECT l.*, u.name AS owner_name FROM leads l
+     LEFT JOIN users u ON u.id = l.owner_id
+     ${where} ORDER BY l.${order} LIMIT ?`,
+    [...params, EXPORT_LIMIT + 1],
+  );
+  const truncated = rows.length > EXPORT_LIMIT;
+  const leads = rows.slice(0, EXPORT_LIMIT).map((row) => crm.leadView(row));
+
+  const escape = (value) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const csv = [
+    EXPORT_COLUMNS.map(([header]) => header).join(','),
+    ...leads.map((lead) => EXPORT_COLUMNS.map(([, read]) => escape(read(lead))).join(',')),
+  ].join('\n');
+
+  audit.recordFromRequest(req, { action: 'lead.export', entityType: 'lead', after: { rows: leads.length } });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="leads-${nowIso().slice(0, 10)}.csv"`);
+  // Said out loud rather than silently cutting the file short.
+  if (truncated) res.setHeader('X-SalesOS-Truncated', String(EXPORT_LIMIT));
+  res.send(csv);
 }));
 
 // GET /leads/facets -- values available for filtering, scoped to the caller.

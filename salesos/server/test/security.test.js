@@ -131,13 +131,19 @@ describe('API hardening', () => {
   });
 
   it('never returns integration credentials', async () => {
+    // An integration the product actually implements. This used to connect
+    // slack, which is now refused as not implemented -- the assertion here is
+    // about credential handling, not about which provider carries them.
     const { api } = await login(ACCOUNTS.admin);
-    await api.post('/admin/integrations/slack', { credentials: { token: 'xoxb-secret-value' }, config: {} });
+    const connected = await api.post('/admin/integrations/google_mail', {
+      credentials: { token: 'xoxb-secret-value' }, config: {},
+    });
+    assert.equal(connected.status, 200, JSON.stringify(connected.body));
     const result = await api.get('/admin/integrations');
     const serialised = JSON.stringify(result.body);
     assert.ok(!serialised.includes('xoxb-secret-value'), 'credentials must never be returned by the API');
-    const slack = result.body.integrations.find((entry) => entry.provider === 'slack');
-    assert.equal(slack.hasCredentials, true);
+    const mail = result.body.integrations.find((entry) => entry.provider === 'google_mail');
+    assert.equal(mail.hasCredentials, true);
   });
 
   it('shows an API key exactly once', async () => {

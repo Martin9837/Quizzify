@@ -618,3 +618,96 @@ describe('settings that used to govern nothing', () => {
     assert.equal(countDigests(), after, 'the scheduler queued a second digest on the same day');
   });
 });
+
+describe('exporting the lead book', () => {
+  it('is refused to a role that may not export', async () => {
+    // lead:export is manager-and-above and was enforced nowhere: the export
+    // ran entirely in the browser, so the button had no guard at all.
+    const denied = await sessions.agent.api.get('/leads/export');
+    assert.equal(denied.status, 403, `an agent exported the book (${denied.status})`);
+  });
+
+  it('exports every matching lead, not the page that happened to be on screen', async () => {
+    // The browser serialised whatever the list had already fetched, which is
+    // one page -- so an organisation with hundreds of leads received a
+    // hundred-row file with nothing saying it had been cut short.
+    const { api } = sessions.manager;
+    const total = (await api.get('/leads?limit=1')).body.total;
+    assert.ok(total > 1, 'the seed should contain more leads than one page');
+
+    const exported = await api.get('/leads/export');
+    assert.equal(exported.status, 200);
+    assert.equal(typeof exported.body, 'string');
+    const lines = exported.body.trim().split('\n');
+    assert.equal(lines[0], 'name,company,title,email,phone,status,temperature,score,source,owner,dealValue,lastContacted');
+    assert.equal(lines.length - 1, total, `exported ${lines.length - 1} rows for ${total} leads`);
+  });
+
+  it('applies the same filters the list applies', async () => {
+    const { api } = sessions.manager;
+    const filtered = (await api.get('/leads?temperature=hot&limit=1')).body.total;
+    const exported = await api.get('/leads/export?temperature=hot');
+    assert.equal(exported.status, 200);
+    assert.equal(exported.body.trim().split('\n').length - 1, filtered,
+      'the export and the list disagreed about the same filter');
+  });
+});
+
+describe('capabilities the product does not have', () => {
+  it('refuses to connect an integration nothing reads', async () => {
+    // Every provider was offered identically, and connecting one wrote a row
+    // and flipped the badge to "connected" while nothing anywhere consulted
+    // it -- so an operator could believe Salesforce was syncing.
+    const { api } = sessions.owner;
+    const listed = (await api.get('/admin/integrations')).body.integrations;
+    const unavailable = listed.find((entry) => entry.available === false);
+    assert.ok(unavailable, 'the catalogue should mark what is not implemented');
+
+    const attempt = await api.post(`/admin/integrations/${unavailable.provider}`, { config: {} });
+    assert.equal(attempt.status, 400, `connecting ${unavailable.provider} returned ${attempt.status}`);
+    assert.match(attempt.body.error.message, /not available yet/);
+
+    const real = listed.find((entry) => entry.available === true);
+    assert.ok(real, 'something must actually be connectable');
+    const connected = await api.post(`/admin/integrations/${real.provider}`, { config: {} });
+    assert.equal(connected.status, 200, `connecting ${real.provider} returned ${connected.status}`);
+    await api.del(`/admin/integrations/${real.provider}`);
+  });
+
+  it('does not advertise permissions no endpoint honours', async () => {
+    // coaching:review, billing:write and org:delete named actions this product
+    // does not have: no route required them and nothing performed them, while
+    // the admin matrix rendered a chip for each.
+    const { api } = sessions.owner;
+    const granted = new Set((await api.get('/auth/me')).body.user.permissions);
+    for (const phantom of ['coaching:review', 'billing:write', 'org:delete']) {
+      assert.equal(granted.has(phantom), false, `${phantom} is still advertised`);
+    }
+  });
+
+  it('deletes a deal, which deal:delete has always promised', async () => {
+    const { api } = sessions.manager;
+    const lead = (await api.get('/leads?limit=1')).body.leads[0];
+    const deal = (await api.post('/deals', {
+      leadId: lead.id, name: 'Entered by mistake', stage: 'qualified', value: 100,
+    })).body.deal;
+
+    const deleted = await api.del(`/deals/${deal.id}`);
+    assert.equal(deleted.status, 200, `DELETE /deals returned ${deleted.status}`);
+    assert.equal((await api.get(`/deals/${deal.id}`)).status, 404, 'the deal survived its deletion');
+
+    // And it leaves the search index with it.
+    const search = await api.get('/search?q=Entered%20by%20mistake');
+    assert.equal(search.body.results.filter((r) => r.entityId === deal.id).length, 0,
+      'the deleted deal is still in search');
+  });
+
+  it('refuses an agent the deletion of a deal', async () => {
+    const { api } = sessions.manager;
+    const lead = (await api.get('/leads?limit=1')).body.leads[0];
+    const deal = (await api.post('/deals', { leadId: lead.id, name: 'Not yours', stage: 'qualified', value: 1 })).body.deal;
+    const attempt = await sessions.agent.api.del(`/deals/${deal.id}`);
+    assert.equal(attempt.status, 403, `an agent deleted a deal (${attempt.status})`);
+    await api.del(`/deals/${deal.id}`);
+  });
+});

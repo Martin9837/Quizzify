@@ -19,6 +19,12 @@ export const ROLE_LABELS = {
 };
 
 // Ordered so `atLeast()` comparisons are cheap and readable.
+// Removed rather than left declared: coaching:review, billing:write and
+// org:delete named actions this product does not have -- no route required
+// them and no endpoint performed them -- while the permissions matrix in the
+// admin screen rendered a chip for each and every login response handed them
+// to the client. A capability advertised and absent is worse than one missing.
+
 const RANK = { agent: 1, manager: 2, admin: 3, super_admin: 4 };
 
 export const PERMISSIONS = {
@@ -57,7 +63,6 @@ export const PERMISSIONS = {
   'analytics:team': 'manager',
   'analytics:org': 'admin',
   'coaching:read': 'agent',
-  'coaching:review': 'manager',
   'report:export': 'agent',
   // Administration
   'user:read': 'manager',
@@ -71,9 +76,7 @@ export const PERMISSIONS = {
   'audit:read': 'admin',
   'security:write': 'admin',
   'billing:read': 'admin',
-  'billing:write': 'super_admin',
   'org:write': 'super_admin',
-  'org:delete': 'super_admin',
   'retention:write': 'super_admin',
 };
 

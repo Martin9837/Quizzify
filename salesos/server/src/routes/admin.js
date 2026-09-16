@@ -383,20 +383,40 @@ router.patch('/organization', requireRole('super_admin'), asyncHandler(async (re
 }));
 
 // --------------------------------------------------------- integrations -----
+/**
+ * What can actually be connected.
+ *
+ * `available: false` marks a provider the product does not implement yet.
+ * They were all offered identically, and connecting one wrote a row and turned
+ * the badge to "connected" -- so an operator could believe their Salesforce
+ * was syncing, or that deal alerts were reaching Slack, when nothing anywhere
+ * read that row. Listing them is useful; letting someone connect them is not.
+ *
+ * Email is wired by category rather than by provider name (see
+ * services/queue/workers.js), so either mail provider really sends.
+ */
 const INTEGRATION_CATALOGUE = [
-  { provider: 'google_mail', category: 'email', name: 'Google Workspace Mail', description: 'Send and log email from the agent inbox.' },
-  { provider: 'microsoft_mail', category: 'email', name: 'Microsoft 365 Mail', description: 'Send and log email via Microsoft Graph.' },
-  { provider: 'google_calendar', category: 'calendar', name: 'Google Calendar', description: 'Two-way meeting sync and availability.' },
-  { provider: 'microsoft_calendar', category: 'calendar', name: 'Microsoft Calendar', description: 'Two-way meeting sync and availability.' },
-  { provider: 'twilio', category: 'telephony', name: 'Twilio Voice', description: 'Outbound and inbound calling with recording.' },
-  { provider: 'vonage', category: 'telephony', name: 'Vonage Voice', description: 'Alternative voice carrier.' },
-  { provider: 'salesforce', category: 'crm', name: 'Salesforce', description: 'Bi-directional lead, contact and opportunity sync.' },
-  { provider: 'hubspot', category: 'crm', name: 'HubSpot', description: 'Bi-directional contact and deal sync.' },
-  { provider: 'slack', category: 'chat', name: 'Slack', description: 'Deal alerts and AI recommendations in channel.' },
-  { provider: 'ms_teams', category: 'chat', name: 'Microsoft Teams', description: 'Deal alerts and AI recommendations in channel.' },
-  { provider: 'twilio_sms', category: 'messaging', name: 'SMS (Twilio)', description: 'Outbound SMS with opt-out handling.' },
-  { provider: 'whatsapp', category: 'messaging', name: 'WhatsApp Business', description: 'Template messaging where permitted.' },
-  { provider: 'stripe', category: 'payments', name: 'Stripe', description: 'Subscription billing and payment links.' },
+  { provider: 'google_mail', category: 'email', name: 'Google Workspace Mail', description: 'Send and log email from the agent inbox.', available: true },
+  { provider: 'microsoft_mail', category: 'email', name: 'Microsoft 365 Mail', description: 'Send and log email via Microsoft Graph.', available: true },
+  { provider: 'google_calendar', category: 'calendar', name: 'Google Calendar', description: 'Two-way meeting sync and availability.', available: false },
+  { provider: 'microsoft_calendar', category: 'calendar', name: 'Microsoft Calendar', description: 'Two-way meeting sync and availability.', available: false },
+  {
+    provider: 'twilio',
+    category: 'telephony',
+    name: 'Twilio Voice',
+    // Credentials come from the deployment's environment, not from here: this
+    // row only tells an inbound webhook which organisation a call belongs to.
+    description: 'Routes inbound calls to this organisation. Calling credentials are set on the server, not here.',
+    available: true,
+  },
+  { provider: 'vonage', category: 'telephony', name: 'Vonage Voice', description: 'Alternative voice carrier.', available: false },
+  { provider: 'salesforce', category: 'crm', name: 'Salesforce', description: 'Bi-directional lead, contact and opportunity sync.', available: false },
+  { provider: 'hubspot', category: 'crm', name: 'HubSpot', description: 'Bi-directional contact and deal sync.', available: false },
+  { provider: 'slack', category: 'chat', name: 'Slack', description: 'Deal alerts and AI recommendations in channel.', available: false },
+  { provider: 'ms_teams', category: 'chat', name: 'Microsoft Teams', description: 'Deal alerts and AI recommendations in channel.', available: false },
+  { provider: 'twilio_sms', category: 'messaging', name: 'SMS (Twilio)', description: 'Outbound SMS with opt-out handling.', available: false },
+  { provider: 'whatsapp', category: 'messaging', name: 'WhatsApp Business', description: 'Template messaging where permitted.', available: false },
+  { provider: 'stripe', category: 'payments', name: 'Stripe', description: 'Subscription billing and payment links.', available: false },
 ];
 
 router.get('/integrations', asyncHandler(async (req, res) => {
@@ -420,6 +440,12 @@ router.get('/integrations', asyncHandler(async (req, res) => {
 router.post('/integrations/:provider', requirePermission('integration:write'), asyncHandler(async (req, res) => {
   const entry = INTEGRATION_CATALOGUE.find((i) => i.provider === req.params.provider);
   if (!entry) throw notFound('Integration');
+  // Refused rather than stored: a row for a provider nothing reads turns the
+  // badge to "connected" and does nothing else, which is the most
+  // straightforward way for this screen to mislead an operator.
+  if (entry.available === false) {
+    throw badRequest(`${entry.name} is not available yet. Connecting it would have no effect.`);
+  }
   const data = validate(req.body, {
     config: { type: 'object', default: {} },
     credentials: { type: 'object' },

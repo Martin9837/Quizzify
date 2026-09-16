@@ -249,7 +249,10 @@ function seedConfiguration(orgId, users, teams) {
       status: integration.status,
       config: JSON.stringify(integration.config),
       credentials_enc: null,
-      last_sync_at: integration.status === 'connected' ? addHours(-int(1, 12)) : null,
+      // Nothing in the product ever writes last_sync_at, so a seeded value is
+      // a "Last sync 3h ago" on the admin screen that is invented and will
+      // never change.
+      last_sync_at: null,
       created_at: addDays(-250),
       updated_at: nowIso(),
     });

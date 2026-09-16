@@ -855,17 +855,26 @@ function Integrations() {
               <div key={integration.provider} className="card" style={{ padding: 'var(--space-3)' }}>
                 <div className="between">
                   <strong className="small">{integration.name}</strong>
-                  <Badge tone={integration.status === 'connected' ? 'success' : integration.status === 'error' ? 'danger' : 'outline'}>
-                    {integration.status}
+                  <Badge tone={integration.available === false ? 'outline'
+                    : integration.status === 'connected' ? 'success'
+                      : integration.status === 'error' ? 'danger' : 'outline'}>
+                    {integration.available === false ? 'not available yet' : integration.status}
                   </Badge>
                 </div>
                 <span className="xs secondary">{integration.description}</span>
                 {integration.lastSyncAt && <span className="xs muted">Last sync {relative(integration.lastSyncAt)}</span>}
                 {integration.lastError && <span className="xs" style={{ color: 'var(--danger)' }}>{integration.lastError}</span>}
                 <div className="row-tight">
-                  <button type="button" className="btn sm" onClick={() => setConfiguring(integration)}>
-                    {integration.status === 'connected' ? 'Configure' : 'Connect'}
-                  </button>
+                  {/* No Connect button for a provider nothing reads: it would
+                      write a row, flip the badge to "connected" and change
+                      nothing about how the product behaves. */}
+                  {integration.available === false ? (
+                    <span className="xs muted">Not implemented yet</span>
+                  ) : (
+                    <button type="button" className="btn sm" onClick={() => setConfiguring(integration)}>
+                      {integration.status === 'connected' ? 'Configure' : 'Connect'}
+                    </button>
+                  )}
                   {integration.status === 'connected' && (
                     <button
                       type="button"

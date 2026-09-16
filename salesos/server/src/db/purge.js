@@ -161,13 +161,12 @@ export function resetSurvivorProfile(options = {}) {
 function resetSurvivor(keeper, { organizationName, adminName } = {}) {
   const now = new Date().toISOString();
 
-  // Promoted to super_admin, not left as it was. Four permissions are
-  // super_admin-only -- org:write, org:delete, billing:write and
-  // retention:write -- so keeping an `admin` as the last account leaves
-  // PATCH /admin/organization permanently unreachable: the organisation
-  // could never be renamed again, because the account that could was the one
-  // just deleted. The survivor is the sole owner of its own organisation,
-  // which is the role a first account gets anyway.
+  // Promoted to super_admin, not left as it was. org:write and
+  // retention:write are super_admin-only, so keeping an `admin` as the last
+  // account leaves PATCH /admin/organization permanently unreachable: the
+  // organisation could never be renamed again, because the account that could
+  // was the one just deleted. The survivor is the sole owner of its own
+  // organisation, which is the role a first account gets anyway.
   run(`UPDATE users SET
          role = 'super_admin',
          team_id = NULL,
