@@ -97,6 +97,28 @@ jobs:
         working-directory: salesos
         run: npm run build
 
+      # wrangler deploy fails outright if a bound bucket does not exist, so the
+      # first deploy after adding the binding has to create it. Creating one
+      # that is already there is not an error worth failing a deploy over, but
+      # anything else is: the message is matched rather than the exit code
+      # being thrown away, so a permissions problem still stops the deploy.
+      - name: Make sure the recordings bucket exists
+        working-directory: salesos/cloudflare/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -uo pipefail
+          if npx wrangler r2 bucket create salesos-recordings 2>&1 | tee bucket.log; then
+            echo "Created salesos-recordings."
+          elif grep -qiE 'already exists|10004' bucket.log; then
+            echo "salesos-recordings is already there."
+          else
+            echo "Could not create the recordings bucket."
+            cat bucket.log
+            exit 1
+          fi
+
       - name: Deploy
         id: deploy
         working-directory: salesos/cloudflare/worker

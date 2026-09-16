@@ -5,6 +5,7 @@ import config from '../../config.js';
 import logger from '../../lib/logger.js';
 import { encryptBuffer, decryptBuffer, sha256 } from '../../lib/crypto.js';
 import { s3Driver } from './provider.s3.js';
+import { r2BindingDriver, setBucket } from './provider.r2.js';
 
 /**
  * Object storage abstraction for call recordings and voicemail.
@@ -66,6 +67,12 @@ drivers.local = {
 drivers.s3 = s3Driver;
 drivers.r2 = s3Driver;
 
+// The binding driver, for a Worker that was handed an R2 bucket on `env`. It
+// needs no keys and never leaves Cloudflare's network; see provider.r2.js.
+drivers.r2binding = r2BindingDriver;
+
+export { setBucket as setR2Bucket };
+
 function driver() {
   return drivers[config.storage.driver] || drivers.local;
 }
@@ -101,4 +108,4 @@ export function signedUrl(key, token) {
   return `/api/v1/recordings/stream?key=${encodeURIComponent(key)}&token=${encodeURIComponent(token)}`;
 }
 
-export default { putObject, getObject, headObject, deleteObject, objectExists, recordingKey, voicemailKey, signedUrl };
+export default { putObject, getObject, headObject, deleteObject, objectExists, recordingKey, voicemailKey, signedUrl, setR2Bucket: setBucket };

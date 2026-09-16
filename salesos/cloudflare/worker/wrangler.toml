@@ -46,6 +46,13 @@ crons = ["* * * * *"]
 
 # Request logs and errors in the dashboard. Without this a 500 in production is
 # invisible.
+# Call recordings. A binding rather than S3 keys: the bucket arrives already
+# authorised and the bytes never leave Cloudflare's network. The deploy
+# workflow creates it if it does not exist.
+[[r2_buckets]]
+binding = "RECORDINGS"
+bucket_name = "salesos-recordings"
+
 [observability]
 enabled = true
 
@@ -54,7 +61,11 @@ NODE_ENV = "production"
 TELEPHONY_PROVIDER = "simulator"
 EMAIL_PROVIDER = "log"
 AI_PROVIDER = "local"
-STORAGE_DRIVER = "r2"
+# The binding, not the S3 API. "r2" is the same store reached over HTTP with
+# SigV4, which needs an access key pair in the deployment's secrets -- and with
+# none configured every recording failed to store, taking the transcript,
+# analysis and coaching score with it. The bound bucket needs no keys.
+STORAGE_DRIVER = "r2binding"
 QUEUE_ENABLED = "false"      # the alarm drives the queue, not setInterval
 SCHEDULER_ENABLED = "false"  # cron drives the scheduler
 

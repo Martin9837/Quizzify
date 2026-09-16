@@ -3,10 +3,11 @@ import { setDriver } from '../../../server/src/db/index.js';
 import { createDurableObjectDriver } from '../../../server/src/db/driver.do.js';
 import { createApp } from '../../../server/src/app.js';
 import { registerWorkers } from '../../../server/src/services/queue/workers.js';
-import { drain } from '../../../server/src/services/queue/index.js';
+import { drain, enqueue } from '../../../server/src/services/queue/index.js';
 import { get } from '../../../server/src/db/index.js';
 import { purgeDemoData, resetSurvivorProfile } from '../../../server/src/db/purge.js';
 import logger from '../../../server/src/lib/logger.js';
+import { setR2Bucket } from '../../../server/src/services/storage/index.js';
 import { createExpressBridge } from './bridge.js';
 import schema from '../../../server/src/db/schema.sql';
 
@@ -40,6 +41,14 @@ export class SalesOsApi extends DurableObject {
 
     // Installed before anything reads, so no call site ever sees node:sqlite.
     setDriver(createDurableObjectDriver(ctx.storage, { schema }));
+
+    // Recordings go to R2. Without a bucket the storage layer falls back to
+    // the local filesystem driver, whose filesystem on workerd is memory
+    // backed and gone at the end of the request -- so every recording, and
+    // therefore every transcript, analysis and coaching score derived from it,
+    // was written into nothing.
+    if (env.RECORDINGS) setR2Bucket(env.RECORDINGS);
+
     registerWorkers();
 
     this.app = createApp();
@@ -99,8 +108,26 @@ export class SalesOsApi extends DurableObject {
    * here. A method on the object cannot be addressed over HTTP at all.
    */
   async runScheduled() {
+    // The cron is the only scheduler this deployment has. runScheduler() --
+    // task reminders, meeting reminders, the overdue digest, stale-lead alerts
+    // and retention enforcement -- runs from a setInterval in
+    // server/src/index.js, which workerd never executes, so all five were
+    // silently dead here while the comment on the cron handler claimed
+    // otherwise. The cron fires every minute, which is exactly the interval
+    // the Node process uses.
+    //
+    // Through the queue rather than called directly, so a pass that throws is
+    // retried, is bounded by the job timeout, and is visible in /admin/system
+    // like every other piece of background work. Skipped when one is already
+    // waiting: the cron fires whether or not the last pass finished, and a
+    // slow pass must not build a backlog of identical jobs.
+    const waiting = get(
+      `SELECT COUNT(*) AS n FROM jobs WHERE type = 'scheduler.tick' AND status IN ('pending','running')`,
+    )?.n || 0;
+    if (!waiting) enqueue('scheduler.tick', {}, { priority: 9 });
+
     await drain({ timeoutMs: 25_000 });
-    return { drained: true };
+    return { drained: true, schedulerQueued: !waiting };
   }
 
   /**

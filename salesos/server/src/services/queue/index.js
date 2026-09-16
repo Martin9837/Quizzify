@@ -241,7 +241,11 @@ export function listJobs({ organizationId, status, limit = 50 } = {}) {
   const params = [];
   let sql = 'SELECT id, type, status, attempts, max_attempts, last_error, run_after, created_at, finished_at FROM jobs WHERE 1=1';
   if (organizationId) {
-    sql += ' AND organization_id = ?';
+    // System jobs -- the scheduler sweep and retention -- run across every
+    // organisation and carry no organization_id, so a strict equality filter
+    // hid exactly the background work an operator most needs to see in
+    // /admin/system. They expose a type and a status, no tenant data.
+    sql += ' AND (organization_id = ? OR organization_id IS NULL)';
     params.push(organizationId);
   }
   if (status) {
