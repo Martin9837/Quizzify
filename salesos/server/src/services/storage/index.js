@@ -6,6 +6,7 @@ import logger from '../../lib/logger.js';
 import { encryptBuffer, decryptBuffer, sha256 } from '../../lib/crypto.js';
 import { s3Driver } from './provider.s3.js';
 import { r2BindingDriver, setBucket } from './provider.r2.js';
+import { databaseDriver } from './provider.db.js';
 
 /**
  * Object storage abstraction for call recordings and voicemail.
@@ -69,7 +70,13 @@ drivers.r2 = s3Driver;
 
 // The binding driver, for a Worker that was handed an R2 bucket on `env`. It
 // needs no keys and never leaves Cloudflare's network; see provider.r2.js.
+//
+// `database` keeps recordings in the application's own database, which on a
+// Worker is the Durable Object's SQLite. No object store to enable, nothing to
+// pay for, and nothing to bind -- the trade is that audio shares the object's
+// 10 GB with the CRM data. See provider.db.js.
 drivers.r2binding = r2BindingDriver;
+drivers.database = databaseDriver;
 
 export { setBucket as setR2Bucket };
 

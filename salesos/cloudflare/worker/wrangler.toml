@@ -46,13 +46,6 @@ crons = ["* * * * *"]
 
 # Request logs and errors in the dashboard. Without this a 500 in production is
 # invisible.
-# Call recordings. A binding rather than S3 keys: the bucket arrives already
-# authorised and the bytes never leave Cloudflare's network. The deploy
-# workflow creates it if it does not exist.
-[[r2_buckets]]
-binding = "RECORDINGS"
-bucket_name = "salesos-recordings"
-
 [observability]
 enabled = true
 
@@ -61,11 +54,15 @@ NODE_ENV = "production"
 TELEPHONY_PROVIDER = "simulator"
 EMAIL_PROVIDER = "log"
 AI_PROVIDER = "local"
-# The binding, not the S3 API. "r2" is the same store reached over HTTP with
-# SigV4, which needs an access key pair in the deployment's secrets -- and with
-# none configured every recording failed to store, taking the transcript,
-# analysis and coaching score with it. The bound bucket needs no keys.
-STORAGE_DRIVER = "r2binding"
+# Recordings live in the Durable Object's own SQLite.
+#
+# R2 is the better home for audio and the driver for it is written and tested
+# (provider.r2.js, STORAGE_DRIVER = "r2binding"), but enabling R2 on an account
+# requires a payment method, and this one has none. The object's storage is
+# already durable and already paid for by the Workers plan; the trade is that
+# audio shares its 10 GB with the CRM data, bounded by the retention sweep.
+# Switching to R2 later is this one line plus the r2_buckets binding.
+STORAGE_DRIVER = "database"
 QUEUE_ENABLED = "false"      # the alarm drives the queue, not setInterval
 SCHEDULER_ENABLED = "false"  # cron drives the scheduler
 

@@ -632,3 +632,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
   body,
   tokenize = 'porter unicode61'
 );
+
+-- ---------------------------------------------------------------- objects ---
+-- Call recordings, when STORAGE_DRIVER=database. On the deployed Worker this
+-- database is the Durable Object's SQLite, which is already durable and needs
+-- no separate object store to be enabled or paid for. Chunked because a single
+-- value on a Durable Object may not exceed 2 MB.
+CREATE TABLE IF NOT EXISTS object_meta (
+  key               TEXT PRIMARY KEY,
+  content_type      TEXT,
+  bytes             INTEGER NOT NULL,
+  stored_bytes      INTEGER NOT NULL,
+  encrypted         INTEGER NOT NULL DEFAULT 0,
+  checksum          TEXT,
+  created_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS object_chunks (
+  key               TEXT NOT NULL,
+  seq               INTEGER NOT NULL,
+  chunk             BLOB NOT NULL,
+  PRIMARY KEY (key, seq)
+);
