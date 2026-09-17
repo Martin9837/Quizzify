@@ -113,8 +113,28 @@ jobs:
             echo "Created salesos-recordings."
           elif grep -qiE 'already exists|10004' bucket.log; then
             echo "salesos-recordings is already there."
+          elif grep -qiE 'Authentication error|code: 10000' bucket.log; then
+            # The first time this ran, the deploy token had Workers permissions
+            # but no R2 ones, and the only clue was "Authentication error
+            # [code: 10000]" against an /r2/buckets URL. Name the remedy.
+            echo "::error::The Cloudflare API token cannot manage R2."
+            {
+              echo "## Deploy stopped: the API token has no R2 permission"
+              echo
+              echo "Creating the \`salesos-recordings\` bucket returned an authentication error."
+              echo "The token can deploy Workers but not manage R2 buckets."
+              echo
+              echo "Fix it at <https://dash.cloudflare.com/profile/api-tokens>:"
+              echo "1. Edit the token behind the \`CLOUDFLARE_API_TOKEN\` secret"
+              echo "2. Add **Account → Workers R2 Storage → Edit**"
+              echo "3. Save, then re-run this workflow"
+              echo
+              echo "Editing a token keeps its value, so the GitHub secret does not need updating."
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat bucket.log
+            exit 1
           else
-            echo "Could not create the recordings bucket."
+            echo "::error::Could not create the recordings bucket."
             cat bucket.log
             exit 1
           fi
