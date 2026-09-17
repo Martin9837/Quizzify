@@ -113,6 +113,26 @@ jobs:
             echo "Created salesos-recordings."
           elif grep -qiE 'already exists|10004' bucket.log; then
             echo "salesos-recordings is already there."
+          elif grep -qiE 'enable R2|code: 10042' bucket.log; then
+            # Second failure mode, met right after the first: the token could
+            # reach R2, but R2 had never been switched on for the account.
+            echo "::error::R2 is not enabled on this Cloudflare account."
+            {
+              echo "## Deploy stopped: R2 is not enabled on the account"
+              echo
+              echo "The token can reach R2, but the account has never activated it."
+              echo
+              echo "Enable it once at <https://dash.cloudflare.com>:"
+              echo "1. **Storage & databases → R2 Object Storage**"
+              echo "2. Accept the enable prompt (a payment method may be required;"
+              echo "   10 GB of storage a month is free and recordings fit inside it)"
+              echo "3. Re-run this workflow \u2014 it creates the bucket itself"
+              echo
+              echo "Do not create the bucket by hand: the deploy names it"
+              echo "\`salesos-recordings\` to match the Worker's binding."
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat bucket.log
+            exit 1
           elif grep -qiE 'Authentication error|code: 10000' bucket.log; then
             # The first time this ran, the deploy token had Workers permissions
             # but no R2 ones, and the only clue was "Authentication error
