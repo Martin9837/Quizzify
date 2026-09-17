@@ -1,4 +1,4 @@
-import { Link, useOutletContext } from 'react-router-dom';
+import { Link, useOutletContext, useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks.js';
 import { useAuth } from '../lib/auth.jsx';
 import { useRealtimeEvent } from '../lib/realtime.jsx';
@@ -103,6 +103,7 @@ function CallListCard({ items, onCall }) {
 export default function Dashboard() {
   const { user, settings } = useAuth();
   const { startCall, askAi } = useOutletContext();
+  const navigate = useNavigate();
   const toast = useToast();
   const { data, loading, error, refetch } = useApi('/analytics/dashboard');
 
@@ -128,6 +129,15 @@ export default function Dashboard() {
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
   const call = async (payload) => {
+    // With nobody chosen there is nothing to dial: this used to POST an empty
+    // call, which the server rejects, so the dashboard's most prominent action
+    // answered every click with an error toast. Send the agent to the dialler
+    // instead -- silently picking someone to ring on their behalf would be
+    // worse than the error was.
+    if (!payload?.leadId && !payload?.to) {
+      navigate('/calls?dial=1');
+      return;
+    }
     const result = await startCall(payload);
     if (result) toast.success(`Dialling ${result.lead?.name || 'the contact'}`);
   };

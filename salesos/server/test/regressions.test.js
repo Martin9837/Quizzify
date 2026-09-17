@@ -711,3 +711,41 @@ describe('capabilities the product does not have', () => {
     await api.del(`/deals/${deal.id}`);
   });
 });
+
+describe('a request for a file that is not there', () => {
+  // The SPA is only mounted when web/dist exists, and CI runs the tests before
+  // it builds the dashboard. Without this the suite would pass locally and
+  // fail on the deploy, which is the worst place to find out.
+  const spaServed = async () => {
+    const response = await fetch(`${base}/leads`);
+    return (response.headers.get('content-type') || '').includes('text/html');
+  };
+
+  it('is a 404, not the app shell served under a script name', async (t) => {
+    if (!(await spaServed())) return t.skip('the built dashboard is not being served');
+    // The SPA catch-all answered every unknown path with index.html so
+    // client-side routing works. Applied to asset paths too, a missing file
+    // came back as an HTML page with status 200 under the name of a script --
+    // and a browser asked to parse index.html as a module fails, leaving a
+    // white screen with nothing to explain it. Every rebuild renames the
+    // hashed bundles, so any client holding the previous index.html hits it.
+    const missing = await fetch(`${base}/assets/index-NOSUCHHASH.js`);
+    assert.equal(missing.status, 404, `a missing bundle returned ${missing.status}`);
+    assert.equal((missing.headers.get('content-type') || '').includes('text/html'), false,
+      'a missing bundle was answered with HTML');
+
+    const image = await fetch(`${base}/icons/not-a-real-icon.png`);
+    assert.equal(image.status, 404);
+  });
+
+  it('still answers a client route with the app shell', async (t) => {
+    if (!(await spaServed())) return t.skip('the built dashboard is not being served');
+    // The other half of the contract: deep links have to keep working.
+    for (const route of ['/leads', '/leads/lead_whatever', '/admin/security']) {
+      const response = await fetch(`${base}${route}`);
+      assert.equal(response.status, 200, `${route} returned ${response.status}`);
+      assert.ok((response.headers.get('content-type') || '').includes('text/html'),
+        `${route} was not answered with the app shell`);
+    }
+  });
+});

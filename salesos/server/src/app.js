@@ -122,8 +122,21 @@ export function createApp() {
       res.sendFile(path.join(webDist, 'sw.js'));
     });
     app.use(express.static(webDist, { maxAge: '1h', index: false }));
+
+    // A request for a *file* that is not there is a 404, not the app shell.
+    //
+    // The catch-all below is what makes client-side routing work: any path the
+    // server does not know is answered with index.html so the SPA can route
+    // it. Applied to asset paths too, that turns a missing file into an HTML
+    // page served under the name of a script -- and a browser asked to parse
+    // index.html as a JavaScript module fails, leaving a white screen with no
+    // clue as to why. Every rebuild renames the hashed bundles, so any client
+    // holding the previous index.html hits exactly that.
+    const ASSET_REQUEST = /^\/assets\/|\.(?:js|mjs|css|map|png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|eot|json|txt|webmanifest)$/i;
+
     app.get(/^\/(?!api|health).*/, (req, res, next) => {
-      res.sendFile(path.join(webDist, 'index.html'), (error) => (error ? next(error) : undefined));
+      if (ASSET_REQUEST.test(req.path)) return next();
+      return res.sendFile(path.join(webDist, 'index.html'), (error) => (error ? next(error) : undefined));
     });
     logger.info('serving built web client', { path: webDist });
   }

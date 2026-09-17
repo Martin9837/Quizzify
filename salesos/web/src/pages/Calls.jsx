@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useOutletContext } from 'react-router-dom';
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import api from '../lib/api.js';
 import { useApi } from '../lib/hooks.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -82,7 +82,10 @@ export default function Calls() {
   const { can, isManager } = useAuth();
   const { startCall } = useOutletContext();
   const [tab, setTab] = useState('all');
-  const [showDialler, setShowDialler] = useState(false);
+  // ?dial=1 opens the dialler on arrival, so a "Call lead" action elsewhere can
+  // send the agent somewhere they can choose who to call.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [showDialler, setShowDialler] = useState(searchParams.get('dial') === '1');
   const [showInbound, setShowInbound] = useState(false);
 
   // The endpoint needs the bearer token, which a plain link cannot carry.
@@ -272,7 +275,13 @@ export default function Calls() {
 
       <Dialler
         open={showDialler}
-        onClose={() => setShowDialler(false)}
+        onClose={() => {
+          setShowDialler(false);
+          if (searchParams.get('dial')) {
+            searchParams.delete('dial');
+            setSearchParams(searchParams, { replace: true });
+          }
+        }}
         onDial={async (payload) => {
           const result = await startCall(payload);
           if (result) refetch();
